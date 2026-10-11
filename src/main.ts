@@ -2,6 +2,7 @@ import './style.css';
 import { COLORS, DEFAULT_WORDS, KIND_NAMES, parseWords, type WeaponKind, type Word } from './data';
 import { loadProgress, mastery, recordAttempt, saveProgress } from './progress';
 import { mountGame, type DungeonScene, type GameEvent, type Snapshot } from './game';
+import type { UpgradeId, UpgradeOption } from './upgrades';
 
 const paths: Record<string, string> = {
   sword: '<path d="m16 3 5 0 0 5-11 11-5-5L16 3Z"/><path d="m4 13 7 7M3 21l4-4"/>',
@@ -32,7 +33,7 @@ const progress = loadProgress();
 let activeWords = DEFAULT_WORDS;
 let scene: DungeonScene | undefined;
 let state: Snapshot | undefined;
-let overlay: 'start' | 'none' | 'pause' | 'hint' | 'reward' | 'finish' = 'start';
+let overlay: 'start' | 'none' | 'pause' | 'hint' | 'reward' | 'upgrade' | 'finish' = 'start';
 let modalOpen = false;
 let ready = false;
 let lastArmory = '';
@@ -42,37 +43,30 @@ let runCorrect = 0, runWrong = 0, runHints = 0;
 let codexTab: 'default' | 'custom' = 'default';
 
 el('app').innerHTML = `
-  <header class="site-header">
-    <a class="brand" href="/" aria-label="워드마스터 홈"><span class="brand-mark">${icon('sword')}</span><span>WORD<span class="brand-light">MASTER</span><small>THE DUNGEON OF MEMORIES</small></span><span class="version">ALPHA 01</span></a>
-    <nav aria-label="게임 메뉴"><button id="codex-button" class="nav-button">${icon('book')}<span>단어 도감</span><span class="nav-count">12</span></button><button id="custom-button" class="nav-button">${icon('plus')}<span>내 단어로 던전 만들기</span></button><span class="nav-divider"></span><button id="sound-button" class="icon-button" aria-label="소리 끄기">${icon('sound')}</button><button id="help-button" class="icon-button" aria-label="플레이 방법">${icon('help')}</button></nav>
-  </header>
-  <main class="shell">
-    <div class="chapter-header"><div><div class="eyebrow"><span class="live-dot"></span> THE FORGOTTEN ARCHIVE <span class="chapter-no">/ CHAPTER 01</span></div><h1>기억의 던전 <span>잊힌 단어를 되찾는 자</span></h1></div><div class="chapter-badge">${icon('diamond')}<span><strong id="word-count">12</strong> WORDS TO RECLAIM</span></div></div>
-    <div class="game-layout">
-      <section class="game-panel" aria-label="던전 게임">
-        <div class="room-toolbar"><div class="room-title"><span class="room-index" id="room-index">01</span><span id="room-title">이끼빛 정원</span><span class="room-tag" id="room-tag">COMBAT</span></div><div class="room-tools"><button id="quick-hint" class="icon-button" aria-label="단어 뜻 보기">${icon('book')}</button><span id="timer">00:00</span><button id="fullscreen-button" class="icon-button" aria-label="게임 전체 화면">${icon('expand')}</button><button id="pause-button" class="icon-button" aria-label="일시정지">${icon('pause')}</button></div></div>
-        <div class="game-stage"><div id="game-canvas" tabindex="0" aria-label="마우스 클릭 이동, 스페이스 공격, Shift 회피, 1·2·3 무기 교체"></div>
-          <div class="canvas-hud"><div class="health"><div class="health-line">${icon('heart')}<span>VITALITY</span><strong id="health-text">100 <i>/ 100</i></strong></div><div class="health-track"><div id="health-fill"></div></div></div><div class="combat-status"><span id="enemy-count">${icon('skull')} 6</span><span id="combo" class="combo">×0 COMBO</span></div></div>
-          <div id="boss-bar" class="boss-bar" hidden><span>기억을 삼킨 수호자</span><div><i id="boss-fill"></i></div><small id="boss-count"></small></div>
-          <div class="stage-corner top-left"></div><div class="stage-corner bottom-right"></div>
-          <div id="game-overlay" class="game-overlay"></div>
-          <div id="toast" class="toast" role="status" hidden></div>
-          <div class="dash-indicator">${icon('bolt')}<span>회피</span><span class="dash-track"><i id="dash-fill"></i></span><kbd>SHIFT</kbd><span class="attack-reminder"><kbd>SPACE</kbd> 공격 · 자동 조준</span></div>
+  <main class="game-panel" aria-label="던전 게임">
+    <div class="game-stage">
+      <div id="game-canvas" tabindex="0" aria-label="바닥 클릭 이동, 몬스터 클릭 공격, 스페이스 공격, Shift 회피, 1·2·3 무기 교체"></div>
+      <header class="arena-menu">
+        <a class="brand" href="/" aria-label="워드마스터 홈"><span class="brand-mark">${icon('sword')}</span><span>WORD<span class="brand-light">MASTER</span><small>기억의 던전 · <strong id="word-count">12</strong>개의 단어</small></span></a>
+        <nav aria-label="게임 메뉴"><button id="codex-button" class="icon-button" aria-label="단어 도감" title="단어 도감">${icon('book')}</button><button id="custom-button" class="icon-button" aria-label="내 단어로 던전 만들기" title="내 단어로 던전 만들기">${icon('plus')}</button><button id="sound-button" class="icon-button" aria-label="소리 끄기">${icon('sound')}</button><button id="help-button" class="icon-button" aria-label="플레이 방법">${icon('help')}</button><button id="fullscreen-button" class="icon-button" aria-label="게임 전체 화면">${icon('expand')}</button><button id="pause-button" class="icon-button" aria-label="일시정지">${icon('pause')}</button></nav>
+      </header>
+      <div class="arena-chapter"><div class="room-title"><span class="room-index" id="room-index">01</span><span id="room-title">이끼빛 정원</span><span class="room-tag" id="room-tag">COMBAT</span></div><div class="arena-route"><span id="route-fraction">1 / 5</span><div id="route"></div></div></div>
+      <div class="arena-status"><span id="timer">00:00</span><span id="enemy-count">남은 적 9</span><span id="wave-status">첫 적을 기다리는 중</span><span id="combo">×0 COMBO</span></div>
+      <div id="boss-bar" class="boss-bar" hidden><span>기억을 삼킨 수호자</span><div><i id="boss-fill"></i></div><small id="boss-count"></small></div>
+      <div class="bottom-hud">
+        <div class="hud-growth"><strong id="level-text">LV. 1</strong><div class="xp-track"><i id="xp-fill"></i></div><small id="xp-text">0 / 24 XP</small><span id="burst-status">정답 0 / 3</span></div>
+        <div class="hud-main">
+          <div class="hud-vitals"><div class="health-line">${icon('heart')}<span>생명력</span><strong id="health-text">100 / 100</strong></div><div class="health-track"><div id="health-fill"></div></div><div class="hud-dash"><kbd>SHIFT</kbd><span>회피</span><span class="dash-track"><i id="dash-fill"></i></span><button id="quick-hint" class="icon-button" aria-label="단어 뜻 보기" title="뜻 보기 (Tab)">${icon('book')}</button></div></div>
+          <div id="armory" class="armory"></div>
         </div>
-        <div class="armory-header"><span><span class="live-dot"></span> EQUIPPED WORDS</span><span>뜻에 맞는 무기로 방어막을 파괴하세요</span></div>
-        <div id="armory" class="armory"></div>
-        <div class="game-footer"><span>마우스 클릭 이동 <b>·</b> <kbd>SPACE</kbd> 공격 <b>·</b> <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 무기 교체 <b>·</b> <kbd>TAB</kbd> 뜻 보기</span><span class="save-status"><span class="live-dot"></span><span id="save-label">자동 저장 활성화</span></span></div>
-      </section>
-      <aside class="sidebar">
-        <section class="side-card weapon-card"><div class="card-heading"><span>현재 무기</span><span class="micro">YOUR WEAPON</span></div><div id="weapon-art" class="weapon-art sword">${icon('sword')}</div><span id="weapon-kind" class="weapon-kind">기억의 검</span><h2 id="weapon-word">reluctant</h2><p class="weapon-description" id="weapon-description">빠른 연속 공격 · 근접</p><button id="hint-button" class="hint-button">${icon('book')} 뜻과 예문 보기 <kbd>TAB</kbd></button><div class="mastery-label"><span>단어 숙련도</span><strong id="mastery-value">0%</strong></div><div class="mastery-track"><i id="mastery-fill"></i></div></section>
-        <section class="side-card route-card"><div class="card-heading"><span>던전 여정</span><span id="route-fraction" class="micro">1 / 5</span></div><div id="route" class="route"></div><div class="route-legend"><span class="legend-dot"></span>현재 방 <span class="legend-dot cleared"></span>정복한 방</div></section>
-        <section class="side-card run-card"><div class="card-heading"><span>이번 탐험</span>${icon('flag')}</div><div class="run-row"><span>기억의 조각</span><strong class="gold" id="score">0</strong></div><div class="run-row"><span>처치한 적</span><strong id="kills">0</strong></div><div class="run-row"><span>의미 적중률</span><strong id="accuracy">—</strong></div></section>
-        <div class="side-note">${icon('shield')}<p>뜻을 알아채는 순간,<br><strong>가장 강한 공격이 시작됩니다.</strong></p></div>
-      </aside>
+        <div class="hud-details"><span id="build-label">무기 강화 전</span><span class="hud-record">조각 <b id="score">0</b> · 처치 <b id="kills">0</b> · 정답률 <b id="accuracy">—</b></span><span class="save-status" id="save-label">자동 저장</span></div>
+      </div>
+      <div id="game-overlay" class="game-overlay"></div>
+      <div id="toast" class="toast" role="status" hidden></div>
+      <div hidden><div id="weapon-art"></div><span id="weapon-kind"></span><span id="weapon-word"></span><span id="weapon-description"></span><span id="mastery-value"></span><i id="mastery-fill"></i><button id="hint-button">힌트</button></div>
     </div>
-    <footer class="page-footer"><span>WORDS ARE YOUR WEAPONS. MEMORY IS YOUR POWER.</span><span>로컬 플레이 · PC 키보드 & 마우스 권장</span></footer>
+    <div id="modal-layer" class="modal-layer" hidden></div>
   </main>
-  <div id="modal-layer" class="modal-layer" hidden></div>
 `;
 
 function persist() {
@@ -89,7 +83,15 @@ function updateState(next: Snapshot) {
   el('health-text').innerHTML = `${next.hp} <i>/ ${next.maxHp}</i>`;
   el('health-fill').style.width = `${next.hp / next.maxHp * 100}%`;
   el('health-fill').classList.toggle('low', next.hp <= 30);
-  el('enemy-count').innerHTML = `${icon('skull')} ${next.remaining}`;
+  el('enemy-count').textContent = `남은 적 ${next.remaining} · 필드 ${next.alive}`;
+  el('wave-status').textContent = next.boss ? '마지막 수호자' : !next.remaining ? '첫 던전을 시작하세요' : next.nextSide !== null ? `${['위', '오른쪽', '아래', '왼쪽'][next.nextSide]}에서 등장 준비` : next.incoming ? `${next.spawnEvery.toFixed(1)}초 간격 · 대기 ${next.incoming}` : '마지막 적을 마무리하세요';
+  el('level-text').textContent = `LV. ${next.level}`;
+  el('xp-fill').style.width = `${next.xp / next.xpNeeded * 100}%`;
+  el('xp-text').textContent = `${next.xp} / ${next.xpNeeded} XP`;
+  el('burst-status').textContent = next.burst > 0 ? `기억 폭주 ${next.burst.toFixed(1)}s` : `정답 ${next.charge} / 3`;
+  el('burst-status').classList.toggle('active', next.burst > 0);
+  document.querySelector('.bottom-hud')!.classList.toggle('overdrive', next.burst > 0);
+  el('build-label').textContent = `검 ${next.upgrades.sword} · 활 ${next.upgrades.bow} · 망치 ${next.upgrades.hammer} 단계${next.attackBoost ? ` · 공격력 +${next.attackBoost}` : ''}${next.haste > 1 ? ` · 속도 ×${next.haste.toFixed(2)}` : ''}`;
   el('combo').textContent = `×${next.combo} COMBO`;
   el('combo').classList.toggle('hot', next.combo >= 3);
   const seconds = Math.floor(next.elapsed);
@@ -100,7 +102,7 @@ function updateState(next: Snapshot) {
   el('boss-bar').hidden = !next.boss;
   el('boss-fill').style.width = `${(1 - next.bossSeals / next.totalSeals) * 100}%`;
   el('boss-count').textContent = `${next.bossSeals} / ${next.totalSeals} 봉인 파괴`;
-  const armoryKey = next.words.map(word => word.id).join(',') + `:${next.slot}`;
+  const armoryKey = next.words.map(word => word.id).join(',') + `:${next.slot}:${Object.values(next.upgrades).join(',')}`;
   if (armoryKey !== lastArmory) { lastArmory = armoryKey; renderArmory(next.words, next.slot); }
   const selected = next.words[next.slot];
   if (selected) {
@@ -112,7 +114,7 @@ function updateState(next: Snapshot) {
 }
 
 function renderArmory(words: Word[], slot: number) {
-  el('armory').innerHTML = words.map((word, index) => `<button class="word-slot ${index === slot ? 'selected' : ''} ${word.kind}" data-slot="${index}" aria-pressed="${index === slot}" aria-label="${index + 1}번 무기 ${escape(word.word)}"><kbd>${index + 1}</kbd><span class="slot-art">${icon(word.kind)}</span><span class="slot-text"><strong>${escape(word.word)}</strong><small>${KIND_NAMES[word.kind]}</small></span><span class="slot-selected">${icon('check')}</span></button>`).join('');
+  el('armory').innerHTML = words.map((word, index) => `<button class="word-slot ${index === slot ? 'selected' : ''} ${word.kind}" data-slot="${index}" aria-pressed="${index === slot}" aria-label="${index + 1}번 무기 ${escape(word.word)}"><kbd>${index + 1}</kbd><span class="slot-art">${icon(word.kind)}</span><span class="slot-text"><strong>${escape(word.word)}</strong><small>${KIND_NAMES[word.kind]}${state?.upgrades[word.kind] ? ` · ${state.upgrades[word.kind]}단계` : ''}</small></span><span class="slot-selected">${icon('check')}</span></button>`).join('');
   el('armory').querySelectorAll<HTMLButtonElement>('[data-slot]').forEach(button => button.addEventListener('click', () => { if (overlay !== 'hint' && !modalOpen) { scene?.equip(Number(button.dataset.slot)); button.blur(); } }));
   const selected = words[slot]; if (!selected) return;
   el('weapon-art').className = `weapon-art ${selected.kind}`; el('weapon-art').innerHTML = icon(selected.kind);
@@ -130,7 +132,7 @@ function renderRoute(next: Snapshot) {
 function showStart() {
   overlay = 'start';
   el('game-overlay').hidden = false;
-  el('game-overlay').innerHTML = `<div class="intro-panel"><div class="intro-emblem">${icon('sword')}<span></span></div><div class="eyebrow">ENTER THE FORGOTTEN ARCHIVE</div><h2>단어를 무기로.<br><em>기억을 힘으로.</em></h2><p>잊힌 단어들이 잠든 유적.<br>그 뜻을 기억하는 자만이 방어막을 깨뜨릴 수 있습니다.</p><div class="intro-stats"><span><strong>12</strong> 단어</span><i></i><span><strong>5</strong> 방</span><i></i><span><strong>1</strong> 수호자</span></div><button id="start-button" class="primary-button" ${ready ? '' : 'disabled'}>${icon('play')} ${ready ? '첫 던전 입장' : '던전 준비 중…'} ${icon('arrow')}</button><span class="intro-tip">클릭 이동 · SPACE 공격 · 1 / 2 / 3 무기 교체</span></div>`;
+  el('game-overlay').innerHTML = `<div class="intro-panel"><div class="intro-emblem">${icon('sword')}<span></span></div><div class="eyebrow">ENTER THE FORGOTTEN ARCHIVE</div><h2>단어를 무기로.<br><em>기억을 힘으로.</em></h2><p>사방에서 깨어나는 적, 기억할수록 강해지는 무기.<br>뜻에 맞는 무기로 방어막을 깨고 조각을 모으세요.</p><div class="intro-stats"><span><strong>4</strong> 방향</span><i></i><span><strong>5</strong> 방</span><i></i><span><strong>1</strong> 수호자</span></div><button id="start-button" class="primary-button" ${ready ? '' : 'disabled'}>${icon('play')} ${ready ? '첫 던전 입장' : '던전 준비 중…'} ${icon('arrow')}</button><span class="intro-tip">바닥 클릭 이동 · 적 클릭 공격 · 1 / 2 / 3 무기 교체</span></div>`;
   el('start-button').addEventListener('click', () => startRun(DEFAULT_WORDS));
 }
 
@@ -140,7 +142,7 @@ function startRun(words: Word[]) {
   lastArmory = lastRoute = ''; overlay = 'none'; el('game-overlay').hidden = true;
   el('word-count').textContent = String(words.length); el('toast').hidden = true;
   scene.start(words); el('game-canvas').focus();
-  toast('의미 방어막부터 파괴하세요. 뜻이 기억나지 않으면 Tab!');
+  toast('첫 적은 위쪽 문에서 등장합니다. 적을 클릭하면 공격!');
 }
 
 function toast(text: string) {
@@ -173,12 +175,25 @@ function showHint() {
   el('hint-close').addEventListener('click', hideOverlay);
 }
 
+function upgradeCards(options: UpgradeOption[], attribute: 'reward' | 'upgrade') {
+  return options.map(option => `<button class="reward-option" data-${attribute}="${option.id}">${icon(option.icon)}<strong>${option.title}</strong><span>${option.description}</span></button>`).join('');
+}
+
+function showUpgrade(options: UpgradeOption[], level: number) {
+  scene?.setPaused(true); overlay = 'upgrade'; el('toast').hidden = true;
+  el('game-overlay').hidden = false;
+  el('game-overlay').innerHTML = `<div class="reward-panel"><div class="eyebrow">LEVEL ${level} · 전투 일시정지</div><h2>무기가 진화합니다.</h2><p>이번 탐험에서 사용할 강화 하나를 선택하세요.</p><div class="reward-options">${upgradeCards(options, 'upgrade')}</div><small>무기 강화는 2단계까지 · 추가 공격은 깨진 방어막을 휩쓸어요</small></div>`;
+  el('game-overlay').querySelectorAll<HTMLButtonElement>('[data-upgrade]').forEach(button => button.addEventListener('click', () => {
+    overlay = 'none'; el('game-overlay').hidden = true; scene?.chooseUpgrade(button.dataset.upgrade as UpgradeId); el('game-canvas').focus();
+  }));
+}
+
 function showReward(room: number) {
   scene?.setPaused(true); overlay = 'reward'; el('toast').hidden = true;
   el('game-overlay').hidden = false;
-  el('game-overlay').innerHTML = `<div class="reward-panel"><div class="eyebrow">CHAMBER ${String(room + 1).padStart(2, '0')} CLEARED</div><h2>기억을 되찾았습니다.</h2><p>다음 방으로 향하기 전, 축복 하나를 선택하세요.</p><div class="reward-options"><button class="reward-option" data-reward="heal">${icon('heart')}<strong>생명의 샘</strong><span>체력 35 회복</span><small>조금 더 오래, 조금 더 멀리.</small></button><button class="reward-option" data-reward="power">${icon('sword')}<strong>날카로운 기억</strong><span>본체 공격력 +8</span><small>깨진 방어막 뒤로 깊은 일격.</small></button><button class="reward-option" data-reward="haste">${icon('bolt')}<strong>바람의 발걸음</strong><span>공격 · 회피 재사용 속도 증가</span><small>생각보다 빠르게 움직이세요.</small></button></div><small>모든 축복은 다음 방 입장 시 체력 10을 추가 회복합니다.</small></div>`;
+  el('game-overlay').innerHTML = `<div class="reward-panel"><div class="eyebrow">CHAMBER ${String(room + 1).padStart(2, '0')} CLEARED</div><h2>기억을 되찾았습니다.</h2><p>다음 방으로 향하기 전, 강화 하나를 선택하세요.</p><div class="reward-options">${upgradeCards(scene!.getUpgradeOptions(), 'reward')}</div><small>다음 방 입장 시 체력 10 회복 · 선택한 강화는 보스전까지 유지됩니다</small></div>`;
   el('game-overlay').querySelectorAll<HTMLButtonElement>('[data-reward]').forEach(button => button.addEventListener('click', () => {
-    overlay = 'none'; el('game-overlay').hidden = true; scene?.chooseReward(button.dataset.reward as 'heal' | 'power' | 'haste'); el('game-canvas').focus();
+    overlay = 'none'; el('game-overlay').hidden = true; scene?.chooseReward(button.dataset.reward as UpgradeId); el('game-canvas').focus();
   }));
 }
 
@@ -224,7 +239,7 @@ function showCustom() {
 }
 
 function showHelp() {
-  openModal(`<div class="eyebrow">A GUIDE FOR THE MEMORY SEEKER</div><h2>당신의 단어로 싸우세요.</h2><div class="help-steps"><div><span>01</span><section><h3>적의 한국어 의미를 읽으세요.</h3><p>‘내키지 않는’ 방어막에는 <b>reluctant</b> 무기가 필요해요. 다른 무기는 튕겨 나갑니다.</p></section></div><div><span>02</span><section><h3>클릭해서 이동하고, Space로 공격.</h3><p>마우스 왼쪽 클릭으로 목적지를 정하세요. 적을 클릭하면 공격 거리까지 다가가요. 1·2·3으로 무기를 바꾸고 Space를 누르면 자동 조준해 공격합니다. 누르고 있으면 연속 공격해요.</p></section></div><div><span>03</span><section><h3>방어막을 부순 뒤 마무리하세요.</h3><p>방어막이 깨지면 적이 잠시 기절해요. 이때는 어떤 무기로든 본체를 공격할 수 있어요. Shift 회피 중에는 피해를 받지 않습니다.</p></section></div><div><span>04</span><section><h3>기억나지 않으면, 잠깐 펼쳐 보세요.</h3><p>Tab으로 현재 무기의 뜻과 예문을 확인하세요. 전투는 멈춥니다. 보스의 마지막 문양은 예문 속 빈칸으로 나타나요.</p></section></div></div><div class="help-keys"><span><kbd>마우스 클릭</kbd> 이동</span><span><kbd>SPACE</kbd> 공격</span><span><kbd>SHIFT</kbd> 회피</span><span><kbd>1 · 2 · 3</kbd> 무기</span><span><kbd>TAB</kbd> 힌트</span><span><kbd>ESC</kbd> 일시정지</span></div>`);
+  openModal(`<div class="eyebrow">A GUIDE FOR THE MEMORY SEEKER</div><h2>당신의 단어로 싸우세요.</h2><div class="help-steps"><div><span>01</span><section><h3>적의 한국어 의미를 읽으세요.</h3><p>‘내키지 않는’ 방어막에는 <b>reluctant</b> 무기가 필요해요. 다른 무기는 튕겨 나갑니다.</p></section></div><div><span>02</span><section><h3>바닥은 이동, 몬스터는 공격.</h3><p>바닥을 클릭하면 이동해요. 몬스터를 클릭하면 검과 망치는 가까이 다가가 연속 공격하고, 활은 제자리에서 그 몬스터에게 발사해요. 바닥 클릭이나 방향키로 공격을 취소할 수 있어요. 1·2·3으로 무기를 바꾸세요. Space를 눌러 자동 조준 공격도 할 수 있어요.</p></section></div><div><span>03</span><section><h3>방어막을 부순 뒤 마무리하세요.</h3><p>방어막이 깨지면 어떤 무기로든 공격할 수 있어요. 적을 잡으면 조각이 자동으로 날아와 경험치가 됩니다. 레벨이 오르면 삼중 화살·검기·충격파 등을 선택하세요. 정답 3연속에는 5초간 기억 폭주가 켜집니다. Shift로 회피하세요.</p></section></div><div><span>04</span><section><h3>기억나지 않으면, 잠깐 펼쳐 보세요.</h3><p>Tab으로 현재 무기의 뜻과 예문을 확인하세요. 전투는 멈춥니다. 보스의 마지막 문양은 예문 속 빈칸으로 나타나요.</p></section></div></div><div class="help-keys"><span><kbd>마우스 클릭</kbd> 이동 / 적 공격</span><span><kbd>SPACE</kbd> 공격</span><span><kbd>SHIFT</kbd> 회피</span><span><kbd>1 · 2 · 3</kbd> 무기</span><span><kbd>TAB</kbd> 힌트</span><span><kbd>ESC</kbd> 일시정지</span></div>`);
 }
 
 function handleGameEvent(event: GameEvent) {
@@ -236,6 +251,7 @@ function handleGameEvent(event: GameEvent) {
   }
   if (event.type === 'toast') toast(event.text);
   if (event.type === 'clear') showReward(event.room);
+  if (event.type === 'upgrade') showUpgrade(event.options, event.level);
   if (event.type === 'finish') showFinish(event.won, event.state);
 }
 
