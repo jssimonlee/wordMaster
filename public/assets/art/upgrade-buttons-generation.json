@@ -1,0 +1,18 @@
+{
+  "tool": "built-in image_gen",
+  "asset": "upgrade-buttons.png",
+  "actualSize": [1254, 1254],
+  "prompt": "Use case: stylized-concept.\nAsset type: one production transparent game UI sprite atlas, square 1536x1536, exact uniform 3-column by 3-row grid, 512x512 cells. Nine ornate circular skill upgrade buttons for a polished fantasy dungeon defense game. No text anywhere.\nEach cell has one centered circular medallion button, same size and silhouette: diameter about 370 pixels, luxurious sculpted gold/bronze rim, small rune details, recessed deep jewel background, dimensional hand-painted 3D fantasy item in center, soft colored magical glow contained within cell. Truly transparent space outside each medallion. All nine cell centers precisely on uniform grid, at x=256,768,1280 and y=256,768,1280. Keep entire medallions and glow inside their cell; no cropped edges, no connecting frame, no backdrop, no shadow underneath entire sheet.\nRow 1 left: attack SPEED, brilliant golden lightning bolt with small swirling motion trails, amber jewel. Row 1 middle: GUIDED PROJECTILE, silver magic arrow curving along a luminous mint S-shaped path toward a small crosshair, teal jewel. Row 1 right: MULTISHOT, three distinct silver arrows fanning outward from violet energy, violet jewel.\nRow 2 left: SWORD EVOLUTION, silver sword with crescent-shaped cyan cutting wave, teal jewel. Row 2 middle: BOW EVOLUTION, ornate golden bow firing a fan of five violet arrows, indigo jewel. Row 2 right: HAMMER EVOLUTION, heavy gold warhammer smashing a cracked stone with amber shockwave, orange jewel.\nRow 3 left: ATTACK POWER, silver blade surrounded by crimson magical flame, ruby jewel. Row 3 middle: HASTE/DASH, silver winged boot with bright blue motion trails, sapphire jewel. Row 3 right: HEALING, luminous emerald heart-shaped crystal with green life leaves, emerald jewel.\nArt direction: premium fantasy action RPG skill selection UI, crisp readable silhouettes at 90px size, high detail on bevels and gems, restrained beautiful luminous accents, painterly polished 3D illustration matching a forest dungeon game. Perspective straight-on button with subtly dimensional center object. Avoid pixel art, flat vector icons, rectangles/cards, labels, numbers, watermark, photographic objects. Actual transparent alpha background.",
+  "layout": [
+    "speed",
+    "guided",
+    "volley",
+    "sword",
+    "bow",
+    "hammer",
+    "power",
+    "haste",
+    "heal"
+  ],
+  "background": "transparent"
+}

@@ -3,6 +3,15 @@ import type { WeaponKind } from './data';
 export type UpgradeId = WeaponKind | 'power' | 'haste' | 'heal';
 export type WeaponLevels = Record<WeaponKind, number>;
 export interface UpgradeOption { id: UpgradeId; title: string; description: string; icon: string; }
+export type BossUpgradeId = 'speed' | 'guided' | 'volley';
+export interface BossUpgradeOption { id: BossUpgradeId; title: string; description: string; icon: string; }
+export function bossUpgradeOptions(speed: number, guided: number, arrows: number): BossUpgradeOption[] {
+  return [
+    { id: 'speed', title: '공격 속도', description: `자동 발사 간격 ${(700 / speed / 1000).toFixed(2)}초 → ${(700 / (speed + .3) / 1000).toFixed(2)}초`, icon: 'bolt' },
+    { id: 'guided', title: '가이디드 미사일', description: guided ? `유도 ${guided} → ${guided + 1}단계 · 더 빠르게 방향을 바꿔 추적` : '탄환이 목표를 따라 방향을 바꿔요 · 선택한 단어는 그대로', icon: 'diamond' },
+    { id: 'volley', title: '발사 수 증가', description: `동시 발사 ${arrows} → ${arrows + 1}발 · 여러 미니언에게 나눠 발사`, icon: 'bow' },
+  ];
+}
 export const emptyWeaponLevels = (): WeaponLevels => ({ sword: 0, bow: 0, hammer: 0 });
 export const experienceNeeded = (level: number) => 24 + (level - 1) * 12;
 export const spawnInterval = (elapsedMs: number, room: number) => Math.max(1500, 4000 - elapsedMs * .07 - room * 150);

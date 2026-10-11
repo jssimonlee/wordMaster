@@ -1,0 +1,132 @@
+{
+  "frames": {
+    "hero": {
+      "frame": {
+        "x": 144,
+        "y": 46,
+        "w": 309,
+        "h": 437
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 309,
+        "h": 437
+      },
+      "sourceSize": {
+        "w": 309,
+        "h": 437
+      }
+    },
+    "chaser": {
+      "frame": {
+        "x": 608,
+        "y": 77,
+        "w": 300,
+        "h": 404
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 300,
+        "h": 404
+      },
+      "sourceSize": {
+        "w": 300,
+        "h": 404
+      }
+    },
+    "charger": {
+      "frame": {
+        "x": 1067,
+        "y": 43,
+        "w": 366,
+        "h": 441
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 366,
+        "h": 441
+      },
+      "sourceSize": {
+        "w": 366,
+        "h": 441
+      }
+    },
+    "caster": {
+      "frame": {
+        "x": 76,
+        "y": 514,
+        "w": 399,
+        "h": 478
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 399,
+        "h": 478
+      },
+      "sourceSize": {
+        "w": 399,
+        "h": 478
+      }
+    },
+    "miniboss": {
+      "frame": {
+        "x": 591,
+        "y": 500,
+        "w": 335,
+        "h": 491
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 335,
+        "h": 491
+      },
+      "sourceSize": {
+        "w": 335,
+        "h": 491
+      }
+    },
+    "boss": {
+      "frame": {
+        "x": 1014,
+        "y": 486,
+        "w": 472,
+        "h": 501
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 472,
+        "h": 501
+      },
+      "sourceSize": {
+        "w": 472,
+        "h": 501
+      }
+    }
+  },
+  "meta": {
+    "image": "characters.png",
+    "size": {
+      "w": 1536,
+      "h": 1024
+    },
+    "scale": "1"
+  }
+}

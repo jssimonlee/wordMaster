@@ -1,0 +1,54 @@
+{
+  "assets": [
+    {
+      "file": "defense.png",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: production background image for a top-down 2D fantasy action RPG, 2560x1600 landscape. High resolution hand-painted game environment, rich material textures, soft directional lighting, finely detailed edges, polished modern indie RPG art, absolutely NOT pixel art. Orthographic elevated camera, near overhead, no horizon, flat playable ground; props concentrated around the outside 12% border, central 76% broad open walkable arena with low visual contrast so characters and labels read clearly. No characters, enemies, text, letters, logos, UI, HUD, grids, or portals. Entire frame is environment, not a framed concept-art card. Calm deep colors, no excessively dark image. A lush enchanted forest battlefield. One broad straight warm brown dirt road running horizontally all the way from left edge to right edge, occupying the middle 50% of the frame; open dirt has delicate wheel ruts and pebbles. Grass, flowering shrubs, ferns, stone ruins and ancient tree roots line top and bottom edges. Small old watchtower fragments at the far right border and ruined stone gateposts at the far left border. Forest green and warm earthen gold, afternoon light. The road is uninterrupted, there are no obstacles in its middle, and no goal markings (added separately in game).",
+      "width": 1586,
+      "height": 992
+    },
+    {
+      "file": "meadow.png",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: production background image for a top-down 2D fantasy action RPG, 2560x1600 landscape. High resolution hand-painted game environment, rich material textures, soft directional lighting, finely detailed edges, polished modern indie RPG art, absolutely NOT pixel art. Orthographic elevated camera, near overhead, no horizon, flat playable ground; props concentrated around the outside 12% border, central 76% broad open walkable arena with low visual contrast so characters and labels read clearly. No characters, enemies, text, letters, logos, UI, HUD, grids, or portals. Entire frame is environment, not a framed concept-art card. Calm deep colors, no excessively dark image. An overgrown ancient woodland sanctuary: mossy carved stone slabs interspersed with soft grass in a broad open courtyard, a gentle worn footpath through center. Massive leafy trees, ferns, flowering shrubs, crumbled stone columns frame the edges, sunlight filters through canopy with soft dappled shadows. Muted emerald, teal moss, warm stone. No central buildings or huge centerpiece.",
+      "width": 1586,
+      "height": 992
+    },
+    {
+      "file": "library.png",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: production background image for a top-down 2D fantasy action RPG, 2560x1600 landscape. High resolution hand-painted game environment, rich material textures, soft directional lighting, finely detailed edges, polished modern indie RPG art, absolutely NOT pixel art. Orthographic elevated camera, near overhead, no horizon, flat playable ground; props concentrated around the outside 12% border, central 76% broad open walkable arena with low visual contrast so characters and labels read clearly. No characters, enemies, text, letters, logos, UI, HUD, grids, or portals. Entire frame is environment, not a framed concept-art card. Calm deep colors, no excessively dark image. A moonlit arcane library combat hall, overhead view of a wide open polished dark slate stone floor with subtle faded gold geometric inlays, no large central symbol. Tall bookshelves filled with antique tomes, carved pillars and warm wall candles are restricted to extreme edges; blue moonlight from upper border windows. Deep midnight blue, muted burgundy, antique brass. Central floor unobstructed.",
+      "width": 1586,
+      "height": 992
+    },
+    {
+      "file": "forge.png",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: production background image for a top-down 2D fantasy action RPG, 2560x1600 landscape. High resolution hand-painted game environment, rich material textures, soft directional lighting, finely detailed edges, polished modern indie RPG art, absolutely NOT pixel art. Orthographic elevated camera, near overhead, no horizon, flat playable ground; props concentrated around the outside 12% border, central 76% broad open walkable arena with low visual contrast so characters and labels read clearly. No characters, enemies, text, letters, logos, UI, HUD, grids, or portals. Entire frame is environment, not a framed concept-art card. Calm deep colors, no excessively dark image. A volcanic ancient forge combat courtyard. Wide unobstructed central ground of detailed cracked dark basalt paving with subtle ember seams; lava channels, anvils, metalwork and crumbled black stone pillars restricted to extreme outside edges. Rich warm orange edge glow against charcoal stone and warm copper. No central pit or lava river across the center.",
+      "width": 1586,
+      "height": 992
+    },
+    {
+      "file": "frost.png",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: production background image for a top-down 2D fantasy action RPG, 2560x1600 landscape. High resolution hand-painted game environment, rich material textures, soft directional lighting, finely detailed edges, polished modern indie RPG art, absolutely NOT pixel art. Orthographic elevated camera, near overhead, no horizon, flat playable ground; props concentrated around the outside 12% border, central 76% broad open walkable arena with low visual contrast so characters and labels read clearly. No characters, enemies, text, letters, logos, UI, HUD, grids, or portals. Entire frame is environment, not a framed concept-art card. Calm deep colors, no excessively dark image. A frozen ruined temple combat arena. Wide open center of icy blue stone paving, fine ice cracks and gently wind-swept snow. Sapphire crystals, broken carved pillars, frost-coated evergreens and deep snow restricted to extreme edges. Cool sapphire, silver blue, soft cyan illumination. No central altar, chasms or objects blocking the center.",
+      "width": 1586,
+      "height": 992
+    },
+    {
+      "file": "characters.png",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: a single production game character atlas on a genuinely transparent background, exactly 1536x1024 pixels, evenly divided into THREE COLUMNS and TWO ROWS, SIX equal 512x512 cells. No grid lines or labels. One isolated full-body character centered in each cell, with transparent empty padding of at least 70px on all sides, no overlap, no shadows on the ground, no environment, all characters same camera and smooth high-definition hand-painted fantasy RPG rendering, NOT pixel art, NOT blocky, strong readable silhouettes. Elevated three-quarter frontal game camera, characters standing ready for combat, entire head and both feet visible. Keep each figure between x=90..420 and y=65..445 within its own cell, feet aligned around y=435. Top row left: small teal-hooded ranger hero in layered leather, glowing turquoise eyes, empty hands held at sides, approachable and agile. Top row middle: purple goblin marauder with long ears, dark violet leather armor, empty hands, sneering face. Top row right: armored iron golem soldier, sturdy dark steel plate armor, muted red glowing eyes, empty hands, broad shoulders. Bottom row left: violet-robed spectral sorcerer, pale angular face under hood, flowing layered cloak and purple arcane accents, empty hands. Bottom row middle: distinct orange and amber elite goblin king with small crown, ornate bronze armor and fiery eyes, empty hands. Bottom row right: towering ancient stone-and-steel guardian boss, detailed segmented armor with antique gold trim, red crystal eyes and massive fists, a grand and imposing silhouette. No weapons attached, no letters or text, no logos or borders. The teal hero, purple minion, iron minion, mage, orange elite and guardian must be visibly separate complete sprites occupying precisely these six cells.",
+      "width": 1536,
+      "height": 1024,
+      "layoutEditPromptFile": "character-layout-edit.txt"
+    },
+    {
+      "file": "weapons.png",
+      "tool": "built-in image_gen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent weapon atlas for a polished hand-painted fantasy action RPG, exactly 1536x512 pixels, THREE equal 512x512 cells in one row, no separators, no labels. Exactly one fully isolated weapon centered in each cell, with generous transparent padding and no ground shadow. Left cell: elegant straight steel longsword with mint-glowing blade edge, antique bronze crossguard and dark leather grip. Center cell: beautifully carved curved wood bow with violet magical accents and a visible taut string. Right cell: ornate heavy war hammer with bronze and steel head, tiny amber crystal inlays, dark wrapped handle. All weapons vertically oriented with blade or hammer head at top and grip at bottom, tips around y=60 and bottom grips around y=445, centered at x=256 within each cell. Detailed painterly 2.5D game icon style matching fantasy characters, smooth surfaces, clean silhouettes, NOT pixel art, no text, no logos, no borders, genuinely transparent background.",
+      "width": 2172,
+      "height": 724
+    }
+  ]
+}

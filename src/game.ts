@@ -1,21 +1,26 @@
 import Phaser from 'phaser';
-import { COLORS, DEFAULT_WORDS, ROOM_NAMES, sentencePrompt, wordGroups, type Word, type WeaponKind } from './data';
+import { COLORS, DEFAULT_WORDS, ROOM_NAMES, wordGroups, type Word, type WeaponKind } from './data';
 import { resolveStrike } from './progress';
 import { GameAudio } from './audio';
-import { ENVIRONMENTS, paintEnvironment, type Environment } from './environments';
-import { arrowCount, emptyWeaponLevels, experienceNeeded, spawnInterval, upgradeOptions, type UpgradeId, type UpgradeOption } from './upgrades';
+import { renderingScale } from './rendering';
+import { ENVIRONMENTS, paintEnvironment, paintDefenseEnvironment, type Environment } from './environments';
+import { arrowCount, bossUpgradeOptions, emptyWeaponLevels, experienceNeeded, spawnInterval, upgradeOptions, type UpgradeId, type UpgradeOption, type BossUpgradeId, type BossUpgradeOption } from './upgrades';
 
 export const WIDTH = 1040;
 export const HEIGHT = 620;
 const FONT = '"Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+const MINI_BOSS_GAP = 160;
 type EnemyKind = 'chaser' | 'charger' | 'caster';
+export type RunMode = 'campaign' | 'boss';
 interface Enemy {
   sprite: Phaser.GameObjects.Sprite;
   shadow: Phaser.GameObjects.Ellipse;
   label: Phaser.GameObjects.Text;
   ring: Phaser.GameObjects.Arc;
+  healthBar: Phaser.GameObjects.Graphics;
   word: Word;
   hp: number;
+  maxHp: number;
   shielded: boolean;
   kind: EnemyKind;
   attackAt: number;
@@ -27,8 +32,10 @@ interface Enemy {
   knockbackY: number;
   dead: boolean;
   boss: boolean;
+  lane?: number;
+  miniBoss?: boolean;
 }
-interface Shot { object: Phaser.GameObjects.Arc; vx: number; vy: number; expires: number; word?: Word; trailAt?: number; secondary?: boolean; pierce?: number; struck?: Set<Enemy>; }
+interface Shot { object: Phaser.GameObjects.Arc; vx: number; vy: number; expires: number; word?: Word; trailAt?: number; secondary?: boolean; pierce?: number; struck?: Set<Enemy>; attackId?: number; guided?: number; target?: Enemy; targetWordId?: string; bossFinisher?: boolean; }
 interface Gem { object: Phaser.GameObjects.Rectangle; born: number; value: number; }
 interface SpawnOrder { word: Word; kind: EnemyKind; side: number; }
 export interface Snapshot {
@@ -37,6 +44,9 @@ export interface Snapshot {
   remaining: number; elapsed: number; dash: number; boss: boolean; bossSeals: number; totalSeals: number; environment: Environment;
   alive: number; incoming: number; spawnEvery: number; nextSide: number | null;
   level: number; xp: number; xpNeeded: number; upgrades: Record<WeaponKind, number>; attackBoost: number; haste: number; burst: number; charge: number;
+  mode: RunMode; bossArrows: number; bossMinions: number; bossColumns: number; bossRoundKills: number; bossKillGoal: number;
+  bossFireInterval: number; bossGuided: number; bossLeaks: number;
+  bossAutoFire: boolean; miniBosses: number;
 }
 export type GameEvent =
   | { type: 'ready' }
@@ -45,12 +55,16 @@ export type GameEvent =
   | { type: 'toast'; text: string }
   | { type: 'clear'; room: number }
   | { type: 'upgrade'; options: UpgradeOption[]; level: number }
+  | { type: 'bossUpgrade'; options: BossUpgradeOption[]; round: number; source?: 'round' | 'miniboss' }
   | { type: 'finish'; won: boolean; state: Snapshot };
 
 export class DungeonScene extends Phaser.Scene {
   private emit: (event: GameEvent) => void;
   readonly audio = new GameAudio();
   private player!: Phaser.GameObjects.Sprite;
+  private playerHealthBar!: Phaser.GameObjects.Graphics;
+  private playerHealthLabel!: Phaser.GameObjects.Text;
+  private playerMoving = false;
   private shadow!: Phaser.GameObjects.Ellipse;
   private held!: Phaser.GameObjects.Image;
   private aimLine!: Phaser.GameObjects.Graphics;
@@ -63,6 +77,7 @@ export class DungeonScene extends Phaser.Scene {
   private shots: Shot[] = [];
   private decoration!: Phaser.GameObjects.Container;
   private floor!: Phaser.GameObjects.Graphics;
+  private backdrop!: Phaser.GameObjects.Image;
   private door!: Phaser.GameObjects.Container;
   private words: Word[] = DEFAULT_WORDS;
   private groups: Word[][] = wordGroups(DEFAULT_WORDS);
@@ -71,6 +86,23 @@ export class DungeonScene extends Phaser.Scene {
   private room = 0;
   private bossOrder: Word[] = [];
   private bossIndex = 0;
+  private mode: RunMode = 'campaign';
+  private bossArrows = 1;
+  private bossFireSpeed = 1;
+  private bossGuided = 0;
+  private bossLeaks = 0;
+  private bossLaunched = 0;
+  private bossRoundKills = 0;
+  private bossTransition = false;
+  private bossUpgradeOpen = false;
+  private bossUpgradeSource: 'round' | 'miniboss' = 'round';
+  private pendingBossRewards = 0;
+  private nextMiniBossAt = 2;
+  private miniBossSerial = 0;
+  private bossAutoFire = true;
+  private attackSerial = 0;
+  private penalizedAttacks = new Set<number>();
+  private bossGuardToastAt = -1000;
   private hp = 100;
   private maxHp = 100;
   private score = 0;
@@ -114,10 +146,19 @@ export class DungeonScene extends Phaser.Scene {
   private burstUntil = 0;
   private charge = 0;
 
-  constructor(emit: (event: GameEvent) => void) { super('dungeon'); this.emit = emit; }
+  constructor(emit: (event: GameEvent) => void, private renderScale = 1) { super('dungeon'); this.emit = emit; }
+
+  preload() {
+    for (const theme of ['defense', 'meadow', 'library', 'forge', 'frost']) this.load.image(`background-${theme}`, `/assets/art/${theme}.png`);
+    for (const atlas of ['characters', 'weapons']) {
+      this.load.image(`${atlas}-source`, `/assets/art/${atlas}.png`);
+      this.load.json(`${atlas}-frames`, `/assets/art/${atlas}.json`);
+    }
+  }
 
   create() {
-    this.makeTextures();
+    for (const atlas of ['characters', 'weapons']) this.prepareAtlas(atlas);
+    this.backdrop = this.add.image(0, 0, 'background-meadow').setOrigin(0).setDepth(-20);
     this.floor = this.add.graphics().setDepth(-10);
     this.decoration = this.add.container(0, 0).setDepth(-5);
     this.door = this.add.container(WIDTH / 2, 62).setDepth(-4);
@@ -126,8 +167,10 @@ export class DungeonScene extends Phaser.Scene {
     this.scale.on('resize', this.resizeArena, this);
     this.events.once('shutdown', () => this.scale.off('resize', this.resizeArena, this));
     this.shadow = this.add.ellipse(520, 490, 31, 12, 0x000000, .5);
-    this.player = this.add.sprite(520, 480, 'hero').setScale(2.5).setDepth(500);
-    this.held = this.add.image(545, 472, 'sword').setScale(2.2).setOrigin(.5, .85).setDepth(502);
+    this.player = this.add.sprite(520, 480, 'characters', 'hero').setDisplaySize(43, 54).setDepth(500);
+    this.playerHealthBar = this.add.graphics().setDepth(805).setVisible(false);
+    this.playerHealthLabel = this.add.text(520, 437, '', { resolution: 3, fontFamily: FONT, fontSize: '12px', color: '#e0fff3', stroke: '#09151a', strokeThickness: 3 }).setOrigin(.5, 1).setDepth(806).setVisible(false);
+    this.held = this.add.image(545, 472, 'weapons', 'sword').setDisplaySize(17, 34).setOrigin(.5, .85).setDepth(502);
     this.aimLine = this.add.graphics().setDepth(499);
     this.movementMarker = this.add.graphics().setDepth(-1);
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,ONE,TWO,THREE') as Record<string, Phaser.Input.Keyboard.Key>;
@@ -141,16 +184,26 @@ export class DungeonScene extends Phaser.Scene {
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (!pointer.leftButtonDown() || !this.running || this.paused || this.finished || this.roomComplete) return;
       this.audio.unlock();
+      const point = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       this.attackTarget = null;
       // Clicking a creature selects it, without selecting the correct word for you.
-      this.lockedTarget = this.enemies.filter(enemy => !enemy.dead && (Phaser.Math.Distance.Between(pointer.x, pointer.y, enemy.sprite.x, enemy.sprite.y) < (enemy.boss ? 58 : 40) || enemy.label.getBounds().contains(pointer.x, pointer.y)))
-        .sort((a, b) => Phaser.Math.Distance.Between(pointer.x, pointer.y, a.sprite.x, a.sprite.y) - Phaser.Math.Distance.Between(pointer.x, pointer.y, b.sprite.x, b.sprite.y))[0] ?? null;
+      this.lockedTarget = this.enemies.filter(enemy => !enemy.dead && (Phaser.Math.Distance.Between(point.x, point.y, enemy.sprite.x, enemy.sprite.y) < (enemy.boss ? 58 : 40) || enemy.label.getBounds().contains(point.x, point.y)))
+        .sort((a, b) => Phaser.Math.Distance.Between(point.x, point.y, a.sprite.x, a.sprite.y) - Phaser.Math.Distance.Between(point.x, point.y, b.sprite.x, b.sprite.y))[0] ?? null;
       this.moveTarget = null;
       this.movementMarker.clear();
       if (!this.lockedTarget) {
-        this.moveTarget = { x: Phaser.Math.Clamp(pointer.x, 78, this.arenaWidth - 78), y: Phaser.Math.Clamp(pointer.y, this.arenaTop, this.arenaBottom) };
+        this.moveTarget = { x: Phaser.Math.Clamp(point.x, 78, this.arenaWidth - 78), y: Phaser.Math.Clamp(point.y, this.arenaTop, this.arenaBottom) };
+        const dx = this.moveTarget.x - this.player.x, dy = this.moveTarget.y - this.player.y;
+        this.playerMoving = Math.hypot(dx, dy) > .5;
+        if (this.playerMoving) {
+          this.angle = Math.atan2(dy, dx);
+          if (this.isBossRoom()) this.holdBossFire();
+        }
         this.showMovementMarker(this.moveTarget.x, this.moveTarget.y);
+      } else {
+        this.angle = Math.atan2(this.lockedTarget.sprite.y - this.player.y, this.lockedTarget.sprite.x - this.player.x);
       }
+      this.sendState();
     });
     this.player.setPosition(this.arenaWidth / 2, (this.arenaTop + this.arenaBottom) / 2);
     this.shadow.setPosition(this.player.x, this.player.y + 19).setDepth(this.player.y - 1);
@@ -159,46 +212,73 @@ export class DungeonScene extends Phaser.Scene {
     this.emit({ type: 'ready' });
   }
 
-  private makeTextures() {
-    const palette: Record<string, number> = { '.': 0, k: 0x10141f, d: 0x253744, t: 0x3b7d80, c: 0x6ee7cc, w: 0xd9fff2, p: 0x644c80, v: 0xb095db, r: 0xef777e, b: 0x48526b, g: 0xb6c0be, a: 0xe8bb75, n: 0x78593e };
-    const texture = (name: string, rows: string[]) => {
-      if (this.textures.exists(name)) return;
-      const g = this.make.graphics({ x: 0, y: 0 });
-      for (let y = 0; y < rows.length; y++) for (let x = 0; x < rows[y].length; x++) {
-        const color = rows[y][x]; if (color !== '.') g.fillStyle(palette[color] ?? 0xffffff).fillRect(x, y, 1, 1);
-      }
-      g.generateTexture(name, rows[0].length, rows.length); g.destroy();
-    };
-    texture('hero', ['.....cccc.......', '....cttttc......', '...ctddddtc.....', '..ctdkkkkdtc....', '..ctkkwwkktt....', '..ctkkkkkktc....', '...ctdddtcc.....', '...dtttttd......', '..ctttttttc.....', '.ccttdttdtcc....', '.cdttddddttc....', '..dttddddttd....', '..dttddddttd....', '...dd....dd.....', '..kkk....kkk....', '................']);
-    texture('chaser', ['.....pppp.......', '....pvvvvp......', '...pvvppvvp.....', '..pvppkkppvp....', '..pvkkrrkkvp....', '..pvkkkkkkvp....', '...pvvvvvvp.....', '...ppvvvvpp.....', '..ppvvvvvvpp....', '..pvvpvvpvvp....', '..pvvppppvvp....', '...pvppppvp.....', '..ppvppppvpp....', '..ppp....ppp....', '...p......p.....', '................']);
-    texture('charger', ['.....bbbb.......', '...ggbbbbgg.....', '..gbbggggbbg....', '..bggbbbbggb....', '..bgkkrrkkgb....', '..bggkkkkggb....', '...bbggggbb.....', '...bbbbbbbb.....', '..gbbbggbbbg....', '.ggbbggggbbgg...', '..gbbggggbbg....', '...bbggggbb.....', '...bbbggbbb.....', '...bb....bb.....', '..kkk....kkk....', '................']);
-    texture('caster', ['......ppp.......', '.....ppvpp......', '....ppvvvpp.....', '...ppvvvvvpp....', '..ppvvkkkvvpp...', '..pvkkrrkkvvp...', '...pkkkkkkvp....', '....pvppvpp.....', '...ppvvvvpp.....', '..ppvvvvvvpp....', '..pvppvvppvp....', '.ppvppppppvpp...', '..pppppppppp....', '...pppppppp.....', '....pppppp......', '................']);
-    texture('boss', ['....aa....aa....', '....abaaaa ba...'.replace(' ', 'b'), '...abbggggbba...', '..abggbbbbggba..', '..bbkkrrrrkkbb..', '..bbkkrrrrkkbb..', '...bggbbbbggb...', '...bbggggggbb...', '..abbggggggbba..', '.aabbbggggbbbaa.', '.abbggbbbbggbba.', '..bbggbbbbggbb..', '..abbggggggbba..', '...bbbggggbbb...', '...bbb....bbb...', '..kkkk....kkkk..']);
-    texture('sword', ['...w....', '...w....', '..wc....', '..wc....', '..wc....', '..wc....', '..cc....', '.aaaa...', '...n....', '...n....']);
-    texture('bow', ['..vv....', '...vv...', '....vv..', '...w.v..', '...w.v..', '...w.v..', '....vv..', '...vv...', '..vv....', '........']);
-    texture('hammer', ['.aaaaaa.', '.agggaa.', '.aaaaaa.', '...n....', '...n....', '...n....', '...n....', '...a....', '........', '........']);
+  private prepareAtlas(key: string) {
+    // Power-of-two backing textures enable smooth mipmapped sampling of small figures.
+    // This pads the GPU texture only; the source images and atlas coordinates stay intact.
+    const image = this.textures.get(`${key}-source`).getSourceImage();
+    if (!(image instanceof HTMLImageElement) && !(image instanceof HTMLCanvasElement)) throw new Error(`Invalid image atlas: ${key}`);
+    const canvas = document.createElement('canvas');
+    canvas.width = Phaser.Math.Pow2.GetNext(image.width); canvas.height = Phaser.Math.Pow2.GetNext(image.height);
+    canvas.getContext('2d')!.drawImage(image, 0, 0);
+    const texture = this.textures.addCanvas(key, canvas)!;
+    const frames = this.cache.json.get(`${key}-frames`).frames as Record<string, { frame: { x: number; y: number; w: number; h: number } }>;
+    for (const [name, { frame }] of Object.entries(frames)) texture.add(name, 0, frame.x, frame.y, frame.w, frame.h);
+    this.textures.remove(`${key}-source`);
   }
 
   private paintRoom() {
-    const theme = this.room >= this.groups.length ? 'astral' : ENVIRONMENTS[this.room % 4];
-    paintEnvironment(this, this.floor, this.decoration, this.door, theme);
-    this.floor.setScale(this.arenaWidth / WIDTH, this.arenaHeight / HEIGHT);
-    this.decoration.setScale(this.arenaWidth / WIDTH, this.arenaHeight / HEIGHT);
+    const environment = this.isBossRoom() ? 'defense' : ENVIRONMENTS[this.room % 4];
+    this.backdrop.setTexture(`background-${environment}`).setVisible(!this.isBossRoom()).setOrigin(.5).setPosition(this.arenaWidth / 2, this.arenaHeight / 2);
+    const image = this.backdrop.texture.getSourceImage();
+    this.backdrop.setScale(Math.max(this.arenaWidth / image.width, this.arenaHeight / image.height));
+    if (this.isBossRoom()) {
+      this.floor.setScale(1); this.decoration.setScale(1);
+      paintDefenseEnvironment(this, this.floor, this.decoration, this.door, this.defenseField());
+    } else {
+      paintEnvironment(this, this.floor, this.decoration, this.door, ENVIRONMENTS[this.room % 4]);
+      this.floor.setScale(this.arenaWidth / WIDTH, this.arenaHeight / HEIGHT);
+      this.decoration.setScale(this.arenaWidth / WIDTH, this.arenaHeight / HEIGHT);
+    }
     this.door.setPosition(this.arenaWidth / 2, 62);
     this.paintGates();
   }
 
+  private defenseField() {
+    const midY = (this.arenaTop + this.arenaBottom) / 2;
+    const laneGap = Math.min(96, Math.max(52, (this.arenaBottom - this.arenaTop - 130) / 3));
+    return { width: this.arenaWidth, height: this.arenaHeight, goalX: 110, bossX: this.arenaWidth - 100,
+      playerX: Math.max(210, this.arenaWidth * .23), midY, laneGap, roadTop: midY - laneGap * 1.5 - 32, roadBottom: midY + laneGap * 1.5 + 32 };
+  }
+
   private resizeArena() {
-    this.arenaWidth = this.scale.gameSize.width;
-    this.arenaHeight = this.scale.gameSize.height;
+    const bounds = this.game.canvas.parentElement!.getBoundingClientRect();
+    const density = renderingScale(bounds.width, bounds.height);
+    if (Math.abs(density - this.renderScale) > .005) {
+      this.renderScale = density;
+      // EXPAND reads these base dimensions each time it recomputes the framebuffer.
+      Object.assign(this.game.config, { width: WIDTH * density, height: HEIGHT * density });
+      this.scale.refresh(); return;
+    }
+    const previousField = this.defenseField();
+    this.arenaWidth = this.scale.gameSize.width / this.renderScale;
+    this.arenaHeight = this.scale.gameSize.height / this.renderScale;
+    this.cameras.main.setZoom(this.renderScale).setScroll((this.arenaWidth - this.scale.gameSize.width) / 2, (this.arenaHeight - this.scale.gameSize.height) / 2);
     const hud = document.querySelector<HTMLElement>('.bottom-hud');
-    this.arenaBottom = this.arenaHeight - Math.max(110, ((hud?.offsetHeight ?? 130) + 35) * this.scale.displayScale.y);
+    this.arenaBottom = this.arenaHeight - Math.max(110, ((hud?.offsetHeight ?? 130) + 35) * this.scale.displayScale.y / this.renderScale);
     const status = document.querySelector<HTMLElement>('.arena-status');
-    this.arenaTop = Math.max(135, ((status?.offsetTop ?? 100) + (status?.offsetHeight ?? 20) + 45) * this.scale.displayScale.y);
+    this.arenaTop = Math.max(135, ((status?.offsetTop ?? 100) + (status?.offsetHeight ?? 20) + 45) * this.scale.displayScale.y / this.renderScale);
     if (this.player) {
       this.player.setPosition(Phaser.Math.Clamp(this.player.x, 78, this.arenaWidth - 78), Phaser.Math.Clamp(this.player.y, this.arenaTop, this.arenaBottom));
+      this.drawPlayerHealth();
       this.moveTarget = null; this.movementMarker.clear();
-      for (const enemy of this.enemies) if (!enemy.dead) enemy.sprite.setPosition(Phaser.Math.Clamp(enemy.sprite.x, 92, this.arenaWidth - 92), Phaser.Math.Clamp(enemy.sprite.y, this.arenaTop, this.arenaBottom - 25));
+      const field = this.defenseField();
+      for (const enemy of this.enemies) if (!enemy.dead) {
+        if (this.isBossRoom()) {
+          const progress = (enemy.sprite.x - previousField.goalX) / (previousField.bossX - previousField.goalX);
+          enemy.sprite.setPosition(enemy.boss ? field.bossX : field.goalX + progress * (field.bossX - field.goalX), field.midY + (enemy.lane ?? 0) * field.laneGap);
+        } else enemy.sprite.setPosition(Phaser.Math.Clamp(enemy.sprite.x, 92, this.arenaWidth - 92), Phaser.Math.Clamp(enemy.sprite.y, this.arenaTop, this.arenaBottom - 25));
+        this.drawEnemyHealth(enemy);
+      }
     }
     if (this.floor) this.paintRoom();
     if (this.spawnWarning) {
@@ -214,25 +294,27 @@ export class DungeonScene extends Phaser.Scene {
 
   private paintGates() {
     this.gates.clear();
-    for (let side = 0; side < 4; side++) {
-      const { x, y } = this.gatePosition(side);
-      this.gates.fillStyle(0x101b24, .75).fillCircle(x, y, 31).lineStyle(2, 0x91c9b4, .35).strokeCircle(x, y, 31);
-      this.gates.lineStyle(1, 0x91c9b4, .2).strokeCircle(x, y, 39);
-    }
   }
 
-  start(words: Word[]) {
+  start(words: Word[], mode: RunMode = 'campaign') {
     this.audio.unlock();
     this.time.removeAllEvents();
     this.time.paused = false; this.tweens.resumeAll();
-    this.words = words; this.groups = wordGroups(words); this.room = 0; this.hp = this.maxHp = 100;
+    this.words = words; this.groups = wordGroups(words); this.mode = mode;
+    this.room = mode === 'boss' ? this.groups.length : 0; this.hp = this.maxHp = 100;
     this.score = this.combo = this.kills = this.elapsed = this.clock = this.lastState = 0;
     this.attackBoost = 0; this.haste = 1; this.paused = false; this.finished = false;
     this.nextAttack = this.nextDash = this.dashUntil = this.invulnerableUntil = this.stunUntil = 0;
     this.hitStopRemaining = 0; this.attackStarted = -1000;
+    this.playerMoving = false;
     this.level = 1; this.xp = this.pendingUpgrades = 0; this.upgradeOpen = false;
     this.weaponLevels = emptyWeaponLevels(); this.swingCount = this.burstUntil = this.charge = 0;
-    this.bossIndex = 0; this.running = true;
+    this.bossIndex = 0; this.bossArrows = 1; this.bossLaunched = this.bossRoundKills = 0;
+    this.bossFireSpeed = 1; this.bossGuided = this.bossLeaks = 0;
+    this.pendingBossRewards = this.miniBossSerial = 0; this.nextMiniBossAt = 2; this.bossAutoFire = true;
+    this.bossTransition = this.bossUpgradeOpen = false; this.bossGuardToastAt = -1000;
+    this.attackSerial = 0; this.penalizedAttacks.clear();
+    this.running = true;
     this.input.keyboard!.addCapture(['SPACE', 'UP', 'DOWN', 'LEFT', 'RIGHT']);
     this.loadRoom();
   }
@@ -247,9 +329,21 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   isRunning() { return this.running && !this.finished; }
+  getPlayerAnchor() {
+    return { x: this.player.x / this.arenaWidth, y: this.player.y / this.arenaHeight, head: 48 / this.arenaHeight };
+  }
+
+  showUpgradeEffect(title: string, color: string) {
+    this.audio.play('break');
+    const glow = this.add.circle(this.player.x, this.player.y, 32).setStrokeStyle(3, Phaser.Display.Color.HexStringToColor(color).color).setDepth(804);
+    this.tweens.add({ targets: glow, scale: 2.3, alpha: 0, duration: 650, onComplete: () => glow.destroy() });
+    this.burst(this.player.x, this.player.y, Phaser.Display.Color.HexStringToColor(color).color, 16);
+    this.floatText(this.player.x, this.player.y - 65, `${title} 강화!`, color);
+  }
+
   equip(slot: number) {
     if (!this.equipped[slot]) return;
-    this.slot = slot; this.held.setTexture(this.equipped[slot].kind); this.sendState();
+    this.slot = slot; this.held.setTexture('weapons', this.equipped[slot].kind); this.sendState();
   }
 
   private applyUpgrade(reward: UpgradeId) {
@@ -268,6 +362,17 @@ export class DungeonScene extends Phaser.Scene {
     this.setPaused(false);
   }
 
+  chooseBossUpgrade(choice: BossUpgradeId) {
+    if (!this.bossUpgradeOpen || !bossUpgradeOptions(this.bossFireSpeed, this.bossGuided, this.bossArrows).some(option => option.id === choice)) return;
+    if (choice === 'speed') this.bossFireSpeed += .3;
+    else if (choice === 'guided') this.bossGuided++;
+    else this.bossArrows++;
+    this.bossUpgradeOpen = false;
+    if (this.bossUpgradeSource === 'round') this.beginBossRound();
+    else { this.pendingBossRewards--; this.nextAttack = this.clock + 1000; }
+    this.setPaused(false); this.sendState();
+  }
+
   chooseReward(reward: UpgradeId) {
     if (!this.roomComplete) return;
     this.applyUpgrade(reward);
@@ -277,7 +382,7 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   private clearEntities() {
-    for (const e of this.enemies) { e.dead = true; this.tweens.killTweensOf([e.sprite, e.shadow, e.label, e.ring]); e.sprite.destroy(); e.shadow.destroy(); e.label.destroy(); e.ring.destroy(); }
+    for (const e of this.enemies) { e.dead = true; this.tweens.killTweensOf([e.sprite, e.shadow, e.label, e.ring]); e.sprite.destroy(); e.shadow.destroy(); e.label.destroy(); e.ring.destroy(); e.healthBar.destroy(); }
     for (const shot of this.shots) shot.object.destroy();
     for (const gem of this.gems) gem.object.destroy();
     if (this.spawnWarning) { this.tweens.killTweensOf(this.spawnWarning.marker); this.spawnWarning.marker.destroy(); }
@@ -302,14 +407,99 @@ export class DungeonScene extends Phaser.Scene {
     } else {
       this.bossIndex = 0;
       this.bossOrder = this.groups.flatMap(group => Phaser.Utils.Array.Shuffle([...group]));
-      this.equipped = this.groups[0];
-      this.spawnEnemy(this.bossOrder[0], 'charger', this.arenaWidth / 2, this.arenaTop + 110, true);
+      this.bossArrows = 1; this.bossUpgradeOpen = false;
+      this.bossFireSpeed = 1; this.bossGuided = this.bossLeaks = 0;
+      this.pendingBossRewards = this.miniBossSerial = 0; this.bossAutoFire = true;
+      const field = this.defenseField();
+      this.player.setPosition(field.playerX, field.midY); this.angle = 0;
+      this.spawnEnemy(this.bossOrder[0], 'charger', field.bossX, field.midY, true);
+      this.beginBossRound();
     }
     this.equip(0); this.banner(this.room < this.groups.length ? `CHAMBER ${String(this.room + 1).padStart(2, '0')}` : 'THE FINAL GUARDIAN', this.roomTitle());
     this.sendState();
   }
 
   private roomTitle() { return this.room < this.groups.length ? ROOM_NAMES[this.room % ROOM_NAMES.length] : '기억을 삼킨 수호자'; }
+
+  private isBossRoom() { return this.room >= this.groups.length; }
+
+  private bossMinionsRemaining() {
+    return this.enemies.filter(enemy => !enemy.dead && !enemy.boss).length;
+  }
+
+  private bossColumns() { return Math.min(4, 1 + Math.floor(this.bossIndex / 3)); }
+  private bossKillGoal() { return this.bossColumns() * 3; }
+  private bossSpawnInterval() { return 1800 - (this.bossColumns() - 1) * 200; }
+  private bossGuarded() { return this.bossRoundKills < this.bossKillGoal() || this.enemies.some(enemy => !enemy.dead && enemy.miniBoss); }
+
+  private holdBossFire() {
+    this.bossAutoFire = false;
+    for (const shot of this.shots) if (shot.word) shot.object.destroy();
+    this.shots = this.shots.filter(shot => !shot.word);
+  }
+
+  private beginBossRound() {
+    const boss = this.enemies.find(enemy => enemy.boss && !enemy.dead);
+    if (!boss) return;
+    this.bossTransition = false; this.bossLaunched = this.bossRoundKills = 0;
+    this.nextMiniBossAt = 2;
+    this.nextAttack = this.clock + 1400;
+    boss.word = this.bossOrder[this.bossIndex]; boss.shielded = true;
+    boss.ring.setVisible(true).setStrokeStyle(2, 0xb9a2e8, .65); boss.label.setText(boss.word.meaning).setColor('#ebe7f6');
+    boss.attackAt = this.clock + 1400; boss.staggerUntil = 0;
+    // Keep vocabulary identity while giving every boss weapon a ranged form.
+    this.equipped = this.groups[Math.floor(this.bossIndex / 3)].map(word => ({ ...word, kind: 'bow' }));
+    this.lockedTarget = this.attackTarget = null; this.equip(0);
+    this.banner(`ROUND ${this.bossIndex + 1} / ${this.bossOrder.length}`, `${this.bossColumns()}열 지원군 · ${this.bossKillGoal()}마리 처치하면 보스 봉인 개방`);
+  }
+
+  private launchBossMinion(boss: Enemy) {
+    // Stagger parallel lanes instead of launching creatures at the player.
+    const columns = this.bossColumns(), lane = this.bossLaunched % columns;
+    if (this.bossMinionsRemaining() >= 24) { boss.attackAt = this.clock + 450; return; }
+    const field = this.defenseField();
+    const x = boss.sprite.x - 105;
+    const live = this.enemies.filter(enemy => !enemy.dead && !enemy.boss);
+    const miniWord = this.equipped.filter(word => word.id !== boss.word.id);
+    const alternatives = miniWord.length ? miniWord : this.words.filter(word => word.id !== boss.word.id);
+    const miniBoss = this.bossLaunched >= this.nextMiniBossAt && this.bossRoundKills < this.bossKillGoal() && !live.some(enemy => enemy.miniBoss) && alternatives.length > 0;
+    // Reserve an empty stretch on both sides of the orange challenger.
+    if (live.some(enemy => (miniBoss || enemy.miniBoss) && enemy.sprite.x > x - MINI_BOSS_GAP - 25)) { boss.attackAt = this.clock + 200; return; }
+    const y = field.midY + (lane - (columns - 1) / 2) * field.laneGap;
+    const word = miniBoss ? alternatives[this.miniBossSerial % alternatives.length] : boss.word;
+    if (miniBoss && !this.equipped.some(weapon => weapon.id === word.id)) this.equipped = [...this.equipped, { ...word, kind: 'bow' }];
+    const minion = this.spawnEnemy(word, this.bossLaunched % 2 ? 'charger' : 'chaser', x, y);
+    minion.miniBoss = miniBoss;
+    minion.lane = lane - (columns - 1) / 2;
+    minion.label.setStyle({ fontSize: '13px', padding: { x: 6, y: 3 }, wordWrap: { width: 140 } });
+    if (miniBoss) {
+      minion.sprite.setTexture('characters', 'miniboss').setDisplaySize(55, 64);
+      minion.hp = minion.maxHp = 96;
+      minion.label.setText(`★ ${word.meaning}`).setColor('#ffdf9c').setBackgroundColor('#462a1c');
+      minion.ring.setStrokeStyle(3, 0xffb451, .95);
+      this.nextMiniBossAt = this.bossLaunched + 7; this.miniBossSerial++;
+      this.emit({ type: 'toast', text: '주황 미니 보스! 이동 중에는 사격이 멈춰요. 다른 단어를 고르고 적을 클릭해 조준하세요.' });
+    }
+    this.drawEnemyHealth(minion);
+    minion.sprite.setAlpha(0); minion.shadow.setAlpha(0); minion.label.setAlpha(0); minion.ring.setAlpha(0); minion.healthBar.setAlpha(0);
+    this.tweens.add({ targets: [minion.sprite, minion.shadow, minion.label, minion.ring, minion.healthBar], alpha: 1, duration: 550 });
+    minion.staggerUntil = this.clock + 550;
+    this.bossLaunched++; boss.attackAt = this.clock + (lane < columns - 1 ? 450 : this.bossSpawnInterval());
+    this.sendState();
+  }
+
+  private dismissBossMinions() {
+    for (const enemy of this.enemies) {
+      if (enemy.boss) continue;
+      if (!enemy.dead) {
+        enemy.dead = true;
+        this.burst(enemy.sprite.x, enemy.sprite.y, 0xb9a2e8, 5);
+        this.tweens.killTweensOf([enemy.sprite, enemy.shadow, enemy.label, enemy.ring, enemy.healthBar]);
+        enemy.sprite.destroy(); enemy.shadow.destroy(); enemy.label.destroy(); enemy.ring.destroy(); enemy.healthBar.destroy();
+      }
+    }
+    this.enemies = this.enemies.filter(enemy => enemy.boss);
+  }
 
   private updateSpawns() {
     if (this.spawnWarning && this.clock >= this.spawnWarning.at) {
@@ -332,18 +522,40 @@ export class DungeonScene extends Phaser.Scene {
 
   private spawnEnemy(word: Word, kind: EnemyKind, x: number, y: number, boss = false) {
     const enemy: Enemy = {
-      sprite: this.add.sprite(x, y, boss ? 'boss' : kind).setScale(boss ? 5.8 : 2.7),
+      sprite: this.add.sprite(x, y, 'characters', boss ? 'boss' : kind).setDisplaySize(boss ? 96 : 43, boss ? 106 : 53),
       shadow: this.add.ellipse(x, y + 15, boss ? 80 : 37, boss ? 25 : 12, 0x000000, .4),
-      label: this.add.text(x, y - (boss ? 65 : 41), word.meaning, { fontFamily: FONT, fontSize: boss ? '19px' : '16px', fontStyle: 'bold', color: '#ebe7f6', backgroundColor: '#171724', padding: { x: 11, y: 6 }, align: 'center', wordWrap: { width: boss ? 340 : 175 } }).setOrigin(.5, 1).setDepth(800),
+      label: this.add.text(x, y - (boss ? 65 : 41), word.meaning, { resolution: 3, fontFamily: FONT, fontSize: word.format === 'quiz' && word.meaning.length > 30 ? boss ? '16px' : '12px' : boss ? '19px' : '16px', fontStyle: 'bold', color: '#ebe7f6', backgroundColor: '#171724', padding: { x: 11, y: 6 }, align: 'center', wordWrap: { width: boss ? 340 : word.format === 'quiz' ? 220 : 175, useAdvancedWrap: word.format === 'quiz' } }).setOrigin(.5, 1).setDepth(800),
       ring: this.add.circle(x, y, boss ? 54 : 27).setStrokeStyle(boss ? 2 : 1.5, 0xb9a2e8, .65),
-      word, hp: boss ? this.words.length * 60 : 64, shielded: true, kind,
+      healthBar: this.add.graphics().setDepth(801),
+      word, hp: boss ? this.words.length * 60 : 64, maxHp: boss ? this.words.length * 60 : 64, shielded: true, kind,
       attackAt: this.clock + 3000 + Math.random() * 1600, staggerUntil: 0, chargeUntil: 0, chargeX: 0, chargeY: 0, knockbackX: 0, knockbackY: 0, dead: false, boss,
     };
     this.enemies.push(enemy);
+    this.drawEnemyHealth(enemy);
+    return enemy;
+  }
+
+  private drawEnemyHealth(enemy: Enemy) {
+    const width = enemy.boss ? 108 : enemy.miniBoss ? 64 : 48, height = enemy.boss ? 8 : 5;
+    const x = enemy.sprite.x - width / 2, y = enemy.sprite.y - (enemy.boss ? 62 : 39);
+    const ratio = Phaser.Math.Clamp(enemy.hp / enemy.maxHp, 0, 1);
+    enemy.healthBar.clear().fillStyle(0x080d17, .95).fillRoundedRect(x - 2, y - 2, width + 4, height + 4, 3);
+    enemy.healthBar.fillStyle(enemy.boss || enemy.miniBoss ? 0xe7b875 : ratio <= .3 ? 0xef879a : 0x80e4c9).fillRect(x, y, width * ratio, height);
+    enemy.label.setPosition(Phaser.Math.Clamp(enemy.sprite.x, enemy.label.width / 2 + 12, this.arenaWidth - enemy.label.width / 2 - 12), y - 7);
+  }
+
+  private drawPlayerHealth() {
+    if (!this.playerHealthBar) return;
+    const ratio = Phaser.Math.Clamp(this.hp / this.maxHp, 0, 1);
+    const color = ratio <= .3 ? 0xef879a : ratio <= .5 ? 0xe7b875 : 0x80e4c9;
+    this.playerHealthBar.setVisible(this.running || this.finished).setPosition(this.player.x, this.player.y - 36);
+    this.playerHealthBar.clear().fillStyle(0x080d17, .95).fillRoundedRect(-30, -2, 60, 10, 3);
+    this.playerHealthBar.fillStyle(color).fillRect(-28, 0, 56 * ratio, 6);
+    this.playerHealthLabel.setVisible(this.running || this.finished).setPosition(this.player.x, this.player.y - 41).setText(`${this.hp} / ${this.maxHp}`);
   }
 
   private banner(kicker: string, title: string) {
-    const text = this.add.text(this.arenaWidth / 2, 95, `${kicker}\n${title}`, { fontFamily: FONT, fontSize: '19px', color: '#d6dbdd', align: 'center', lineSpacing: 8, backgroundColor: '#131923', padding: { x: 25, y: 13 } }).setOrigin(.5).setDepth(1000);
+    const text = this.add.text(this.arenaWidth / 2, 95, `${kicker}\n${title}`, { resolution: 3, fontFamily: FONT, fontSize: '19px', color: '#d6dbdd', align: 'center', lineSpacing: 8, backgroundColor: '#131923', padding: { x: 25, y: 13 } }).setOrigin(.5).setDepth(1000);
     this.tweens.add({ targets: text, alpha: 0, delay: 1600, duration: 600, onComplete: () => text.destroy() });
   }
 
@@ -353,6 +565,7 @@ export class DungeonScene extends Phaser.Scene {
     if (this.hitStopRemaining > 0) { this.hitStopRemaining = Math.max(0, this.hitStopRemaining - delta); return; }
     const dt = Math.min(delta, 40); this.clock += dt; this.elapsed += dt / 1000;
     this.updateSpawns();
+    const previousX = this.player.x, previousY = this.player.y;
     const key = this.keys;
     let mx = Number(key.D.isDown || key.RIGHT.isDown) - Number(key.A.isDown || key.LEFT.isDown);
     let my = Number(key.S.isDown || key.DOWN.isDown) - Number(key.W.isDown || key.UP.isDown);
@@ -369,9 +582,11 @@ export class DungeonScene extends Phaser.Scene {
       else if (!this.lockedTarget && this.moveTarget) { this.player.setPosition(this.moveTarget.x, this.moveTarget.y); this.moveTarget = null; this.movementMarker.clear(); }
     }
     if (length && Math.hypot(mx, my) > 1) { const magnitude = Math.hypot(mx, my); mx /= magnitude; my /= magnitude; }
-    const target = this.getAttackTarget();
-    if (target) this.angle = Math.atan2(target.sprite.y - this.player.y, target.sprite.x - this.player.x);
-    else if (length) this.angle = Math.atan2(my, mx);
+    if (length) this.angle = Math.atan2(my, mx);
+    else {
+      const aim = this.getAttackTarget();
+      if (aim && (!this.isBossRoom() || this.lockedTarget)) this.angle = Math.atan2(aim.sprite.y - this.player.y, aim.sprite.x - this.player.x);
+    }
     if (Phaser.Input.Keyboard.JustDown(key.SHIFT) && this.clock >= this.nextDash && this.clock >= this.stunUntil) {
       this.dashX = length ? mx : Math.cos(this.angle); this.dashY = length ? my : Math.sin(this.angle);
       this.dashUntil = this.clock + 165; this.nextDash = this.clock + 1300 / this.haste; this.invulnerableUntil = Math.max(this.invulnerableUntil, this.clock + 280);
@@ -380,19 +595,27 @@ export class DungeonScene extends Phaser.Scene {
     if (this.clock < this.dashUntil) {
       this.player.x += this.dashX * .72 * dt; this.player.y += this.dashY * .72 * dt;
       if (Math.floor(this.clock / 32) !== Math.floor((this.clock - dt) / 32)) {
-        const ghost = this.add.image(this.player.x, this.player.y, 'hero').setScale(2.5).setAlpha(.28).setDepth(this.player.y - 1);
+        const ghost = this.add.image(this.player.x, this.player.y, 'characters', 'hero').setDisplaySize(43, 54).setFlipX(this.player.flipX).setAlpha(.28).setDepth(this.player.y - 1);
         this.tweens.add({ targets: ghost, alpha: 0, duration: 200, onComplete: () => ghost.destroy() });
       }
     } else if (this.clock >= this.stunUntil) {
       this.player.x += mx * .21 * dt; this.player.y += my * .21 * dt;
     }
     this.player.x = Phaser.Math.Clamp(this.player.x, 78, this.arenaWidth - 78); this.player.y = Phaser.Math.Clamp(this.player.y, this.arenaTop, this.arenaBottom);
+    // Include the arrival snap and dash so even the last moving frame cannot fire.
+    this.playerMoving = Boolean(length || this.clock < this.dashUntil || Math.hypot(this.player.x - previousX, this.player.y - previousY) > .001);
+    if (this.isBossRoom()) {
+      if (this.playerMoving && this.bossAutoFire) this.holdBossFire();
+      this.bossAutoFire = !this.playerMoving && !this.pendingBossRewards;
+    }
+    const target = this.playerMoving ? null : this.getAttackTarget();
+    this.drawPlayerHealth();
     this.player.setFlipX(Math.cos(this.angle) < 0).setDepth(this.player.y + 3);
     this.player.setAlpha(this.clock < this.invulnerableUntil ? .65 + Math.sin(this.clock / 55) * .25 : 1);
     this.player.setTint(this.clock < this.burstUntil ? 0xffe3a3 : 0xffffff);
     if (this.clock < this.burstUntil && Math.floor(this.clock / 70) !== Math.floor((this.clock - dt) / 70)) {
-      const glow = this.add.image(this.player.x, this.player.y, 'hero').setScale(2.7).setTint(0xffdc85).setAlpha(.35).setDepth(this.player.y - 1);
-      this.tweens.add({ targets: glow, alpha: 0, scale: 3.5, duration: 250, onComplete: () => glow.destroy() });
+      const glow = this.add.image(this.player.x, this.player.y, 'characters', 'hero').setDisplaySize(46, 58).setFlipX(this.player.flipX).setTint(0xffdc85).setAlpha(.35).setDepth(this.player.y - 1);
+      this.tweens.add({ targets: glow, alpha: 0, scaleX: glow.scaleX * 1.3, scaleY: glow.scaleY * 1.3, duration: 250, onComplete: () => glow.destroy() });
     }
     const bob = length && this.clock >= this.dashUntil ? Math.sin(this.clock / 65) * 2 : 0;
     this.shadow.setPosition(this.player.x, this.player.y + 19).setDepth(this.player.y - 1);
@@ -401,7 +624,7 @@ export class DungeonScene extends Phaser.Scene {
     const swing = swingProgress < 1 ? Math.sin(swingProgress * Math.PI) : 0;
     const weaponAngle = this.angle + (kind === 'bow' ? 0 : swingProgress < 1 ? (swingProgress - .5) * 2.2 : 0);
     this.held.setPosition(this.player.x + Math.cos(weaponAngle) * (23 + swing * (kind === 'bow' ? -7 : 22)), this.player.y + Math.sin(weaponAngle) * (15 + swing * 20) + bob)
-      .setRotation(weaponAngle + Math.PI / 2).setScale(2.2 + swing * .45).setDepth(this.player.y + 5);
+      .setRotation(weaponAngle + Math.PI / 2).setDisplaySize(this.held.frame.realWidth / this.held.frame.realHeight * 38 * (1 + swing * .2), 38 * (1 + swing * .2)).setDepth(this.player.y + 5);
     this.aimLine.clear().lineStyle(1, Phaser.Display.Color.HexStringToColor(COLORS[this.equipped[this.slot].kind]).color, .18);
     this.aimLine.lineBetween(this.player.x + Math.cos(this.angle) * 30, this.player.y + Math.sin(this.angle) * 30, this.player.x + Math.cos(this.angle) * 70, this.player.y + Math.sin(this.angle) * 70);
     if (target) {
@@ -410,10 +633,15 @@ export class DungeonScene extends Phaser.Scene {
       for (const side of [-1, 1]) this.aimLine.lineBetween(x + side * r, y - 10, x + side * r, y + 10).lineBetween(x + side * r, y - 10, x + side * (r - 6), y - 10).lineBetween(x + side * r, y + 10, x + side * (r - 6), y + 10);
     }
     const clickAttack = this.lockedTarget && (kind === 'bow' || Phaser.Math.Distance.Between(this.player.x, this.player.y, this.lockedTarget.sprite.x, this.lockedTarget.sprite.y) < this.meleeRange(kind) + (this.lockedTarget.boss ? 25 : 0));
-    if ((key.SPACE.isDown || clickAttack) && this.clock >= this.nextAttack && this.clock >= this.stunUntil && this.clock >= this.dashUntil) this.attack();
+    const automatic = this.isBossRoom() && this.bossAutoFire && !this.bossTransition;
+    if (!this.playerMoving && (automatic || (!this.isBossRoom() && (key.SPACE.isDown || clickAttack))) && this.clock >= this.nextAttack && this.clock >= this.stunUntil && this.clock >= this.dashUntil) this.attack();
     for (const enemy of this.enemies) if (!enemy.dead) this.updateEnemy(enemy, dt);
     this.updateShots(dt);
     this.updateGems(dt);
+    if (this.pendingBossRewards && !this.bossUpgradeOpen && !this.bossTransition && !this.finished) {
+      this.holdBossFire(); this.bossUpgradeOpen = true; this.bossUpgradeSource = 'miniboss'; this.setPaused(true); this.sendState();
+      this.emit({ type: 'bossUpgrade', source: 'miniboss', options: bossUpgradeOptions(this.bossFireSpeed, this.bossGuided, this.bossArrows), round: this.bossIndex + 1 }); return;
+    }
     if (this.pendingUpgrades && !this.upgradeOpen && !this.finished) {
       this.upgradeOpen = true; this.sendState(); this.emit({ type: 'upgrade', options: this.getUpgradeOptions(), level: this.level }); return;
     }
@@ -426,13 +654,17 @@ export class DungeonScene extends Phaser.Scene {
 
   private meleeRange(kind: WeaponKind) { return (kind === 'hammer' ? 107 : 100) + this.weaponLevels[kind] * 20; }
 
-  private fireProjectile(word: Word, angle: number, secondary = false, pierce = 0) {
+  private fireProjectile(word: Word, angle: number, secondary = false, pierce = 0, attackId = this.attackSerial, target?: Enemy, barrelOffset = 0) {
     const color = Phaser.Display.Color.HexStringToColor(COLORS[word.kind]).color;
     const wave = word.kind === 'sword';
-    const object = this.add.circle(this.player.x + Math.cos(angle) * 28, this.player.y + Math.sin(angle) * 28, wave ? 11 : 4, color, wave ? .65 : 1)
+    const object = this.add.circle(this.player.x + Math.cos(angle) * 12 - Math.sin(angle) * barrelOffset, this.player.y + Math.sin(angle) * 12 + Math.cos(angle) * barrelOffset, wave ? 11 : 4, color, wave ? .65 : 1)
       .setStrokeStyle(wave ? 2 : 1.5, 0xffffff).setScale(wave ? .7 : 2.8, wave ? 2 : .8).setRotation(angle).setDepth(900);
     const speed = wave ? .7 : .85;
-    this.shots.push({ object, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, expires: this.clock + 2200, word, trailAt: 0, secondary, pierce, struck: new Set() });
+    const guided = this.isBossRoom() ? this.bossGuided : 0;
+    const bossFinisher = Boolean(target?.boss && !this.bossGuarded());
+    if (bossFinisher) { pierce = 24; object.setFillStyle(0xffd58a).setStrokeStyle(2, 0xfff1b5); }
+    if (guided) object.setFillStyle(0xb9f3dd).setStrokeStyle(1.5, 0xfff1b5);
+    this.shots.push({ object, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, expires: this.clock + (guided ? 4000 : 2200), word, trailAt: 0, secondary, pierce, struck: new Set(), attackId, guided, target, targetWordId: target?.word.id, bossFinisher });
   }
 
   private shockwave(x: number, y: number, radius: number, word: Word, exclude?: Enemy) {
@@ -445,24 +677,35 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   private attack() {
+    const attackId = ++this.attackSerial;
     const target = this.getAttackTarget();
     this.attackTarget = target;
-    if (target) this.angle = Math.atan2(target.sprite.y - this.player.y, target.sprite.x - this.player.x);
+    if (target && (!this.isBossRoom() || this.lockedTarget)) this.angle = Math.atan2(target.sprite.y - this.player.y, target.sprite.x - this.player.x);
     const word = this.equipped[this.slot]; const color = Phaser.Display.Color.HexStringToColor(COLORS[word.kind]).color;
     const rank = this.weaponLevels[word.kind], frenzy = this.clock < this.burstUntil;
-    this.nextAttack = this.clock + ({ sword: 360, bow: 490, hammer: 660 }[word.kind]) / (this.haste * (frenzy ? 1.65 : 1));
+    this.nextAttack = this.clock + (this.isBossRoom() ? 700 / this.bossFireSpeed : ({ sword: 360, bow: 490, hammer: 660 }[word.kind]) / (this.haste * (frenzy ? 1.65 : 1)));
     this.attackStarted = this.clock;
     this.audio.play(word.kind === 'bow' ? 'shoot' : 'swing');
     if (word.kind === 'bow') {
+      if (this.isBossRoom()) {
+        const targets = this.enemies.filter(enemy => !enemy.dead && !enemy.boss && enemy !== target && enemy.word.id === target?.word.id && this.inFacingDirection(enemy)).sort((a, b) => a.sprite.x - b.sprite.x);
+        for (let i = 0; i < this.bossArrows; i++) {
+          const aim = i === 0 ? target : targets[(i - 1) % targets.length] ?? target;
+          const direction = aim && aim !== target ? Math.atan2(aim.sprite.y - this.player.y, aim.sprite.x - this.player.x) : this.angle;
+          const barrelOffset = i === 0 ? 0 : Math.min(16, Math.ceil(i / 2) * 7) * (i % 2 ? -1 : 1);
+          this.fireProjectile(word, direction, false, 0, attackId, aim ?? undefined, barrelOffset);
+        }
+        return;
+      }
       const volley = (direction: number) => {
-        this.fireProjectile(word, direction, false, rank >= 2 ? 2 : 0);
+        this.fireProjectile(word, direction, false, rank >= 2 ? 2 : 0, attackId);
         const count = arrowCount(rank);
-        for (let i = 1; i <= (count - 1) / 2; i++) for (const side of [-1, 1]) this.fireProjectile(word, direction + side * i * .15, true, rank >= 2 ? 2 : 0);
+        for (let i = 1; i <= (count - 1) / 2; i++) for (const side of [-1, 1]) this.fireProjectile(word, direction + side * i * .15, true, rank >= 2 ? 2 : 0, attackId);
       };
       volley(this.angle);
       if (frenzy) {
         const direction = this.angle;
-        this.time.delayedCall(100, () => { if (this.running && !this.finished && !this.roomComplete) volley(direction); });
+        this.time.delayedCall(100, () => { if (this.running && !this.paused && !this.playerMoving && !this.finished && !this.roomComplete) volley(direction); });
       }
       return;
     }
@@ -482,7 +725,7 @@ export class DungeonScene extends Phaser.Scene {
     const primary = targets[0];
     const impactX = primary?.sprite.x ?? this.player.x + Math.cos(this.angle) * 68;
     const impactY = primary?.sprite.y ?? this.player.y + Math.sin(this.angle) * 68;
-    if (primary) this.strike(primary, word);
+    if (primary) this.strike(primary, word, false, attackId);
     if (word.kind === 'sword') {
       if (rank || frenzy) this.fireProjectile(word, this.angle, true, rank >= 2 ? 2 : 0);
       this.swingCount++;
@@ -503,22 +746,35 @@ export class DungeonScene extends Phaser.Scene {
     }
   }
 
-  private strike(enemy: Enemy, word: Word, secondary = false) {
-    if (enemy.dead || (secondary && enemy.shielded)) return;
-    const result = resolveStrike(word.id, enemy.word.id, enemy.shielded);
+  private strike(enemy: Enemy, word: Word, secondary = false, attackId?: number) {
+    if (enemy.dead || this.finished || this.bossTransition || (secondary && enemy.shielded)) return;
+    const result = this.isBossRoom() && word.id !== enemy.word.id ? 'rebound' : resolveStrike(word.id, enemy.word.id, enemy.shielded);
     if (result === 'rebound') {
       this.combo = 0; this.charge = 0; this.stunUntil = this.clock + 180; this.audio.play('wrong');
       this.floatText(enemy.sprite.x, enemy.sprite.y - 24, '튕김 · 다른 단어!', '#ef8997');
       this.emit({ type: 'attempt', word: enemy.word, result: 'wrong' });
-      this.emit({ type: 'toast', text: '방어막의 뜻에 맞는 단어로 무기를 바꿔 보세요.' });
+      this.emit({ type: 'toast', text: this.isBossRoom() ? '오답! 생명력 −8 · 점수 −25. 단어를 바꿔 보세요.' : '다른 뜻을 공격해서 생명력 −8! 단어를 바꿔 보세요.' });
       this.impact(enemy, word, 'rebound');
+      // One health penalty per volley; dodge immunity does not cancel a wrong answer.
+      if (attackId === undefined || !this.penalizedAttacks.has(attackId)) {
+        if (attackId !== undefined) this.penalizedAttacks.add(attackId);
+        if (this.isBossRoom()) this.score -= 25;
+        this.hurt(8, true);
+      }
       this.burst(enemy.sprite.x, enemy.sprite.y, 0xee8592, 6); this.sendState(); return;
+    }
+    if (enemy.boss && this.bossGuarded()) {
+      if (this.clock - this.bossGuardToastAt > 1500) {
+        this.bossGuardToastAt = this.clock;
+        this.emit({ type: 'toast', text: `미니언 ${Math.max(0, this.bossKillGoal() - this.bossRoundKills)}마리를 더 처치하면 보스의 봉인이 열려요.` });
+      }
+      return;
     }
     if (result === 'break') {
       enemy.shielded = false; enemy.ring.setVisible(false); enemy.label.setColor('#6ee7cc');
-      enemy.label.setText(`✓ ${enemy.word.word}`); enemy.staggerUntil = this.clock + (enemy.boss ? 1000 : 1400);
+      enemy.label.setText(`${enemy.miniBoss ? '★ ' : ''}✓ ${enemy.word.word}`); enemy.staggerUntil = this.clock + (enemy.boss ? 1000 : 1400);
       this.combo++; this.score += 60 + Math.min(this.combo, 5) * 10;
-      if (this.clock >= this.burstUntil) {
+      if (!this.isBossRoom() && this.clock >= this.burstUntil) {
         this.charge++;
         if (this.charge >= 3) {
           this.charge = 0; this.burstUntil = this.clock + 5000;
@@ -531,15 +787,21 @@ export class DungeonScene extends Phaser.Scene {
       this.floatText(enemy.sprite.x, enemy.sprite.y - 20, this.combo >= 3 ? `SHATTER ×${this.combo}` : 'SHATTER!', '#8af0d9');
       enemy.hp -= enemy.boss ? 60 : 30;
       if (enemy.boss) {
+        this.drawEnemyHealth(enemy);
+        this.dismissBossMinions();
         this.bossIndex++;
         if (this.bossIndex >= this.bossOrder.length) { this.kill(enemy); this.finish(true); return; }
+        this.bossTransition = true;
+        this.lockedTarget = this.attackTarget = null;
         this.time.delayedCall(1000, () => {
           if (enemy.dead || this.finished) return;
-          const newGroup = Math.floor(this.bossIndex / 3);
-          if (this.equipped !== this.groups[newGroup]) { this.equipped = this.groups[newGroup]; this.equip(0); this.banner('NEW ARMORY', '다음 기억의 무기가 깨어납니다'); }
-          enemy.word = this.bossOrder[this.bossIndex]; enemy.shielded = true; enemy.ring.setVisible(true);
-          const prompt = this.bossIndex >= this.bossOrder.length - 3 ? sentencePrompt(enemy.word) : null;
-          enemy.label.setText(prompt ?? enemy.word.meaning).setColor('#ebe7f6'); this.sendState();
+          // Clear arrows from the previous word before the next round starts.
+          for (const shot of this.shots) shot.object.destroy(); this.shots = [];
+          if (this.bossIndex % 3 === 0) {
+            this.bossUpgradeOpen = true; this.bossUpgradeSource = 'round'; this.setPaused(true);
+            this.emit({ type: 'bossUpgrade', source: 'round', options: bossUpgradeOptions(this.bossFireSpeed, this.bossGuided, this.bossArrows), round: this.bossIndex });
+          } else this.beginBossRound();
+          this.sendState();
         });
       }
     } else {
@@ -551,6 +813,7 @@ export class DungeonScene extends Phaser.Scene {
       this.burst(enemy.sprite.x, enemy.sprite.y, Phaser.Display.Color.HexStringToColor(COLORS[word.kind]).color, word.kind === 'hammer' ? 18 : 10);
     }
     if (!enemy.boss && enemy.hp <= 0) this.kill(enemy);
+    else this.drawEnemyHealth(enemy);
     this.sendState();
   }
 
@@ -573,30 +836,50 @@ export class DungeonScene extends Phaser.Scene {
     if (result === 'rebound') return;
     enemy.sprite.setTintFill(0xffffff);
     this.time.delayedCall(100, () => { if (!enemy.dead) enemy.sprite.clearTint(); });
-    this.tweens.killTweensOf(enemy.sprite);
-    const scale = enemy.boss ? 5.8 : 2.7;
-    enemy.sprite.setScale(scale * 1.22, scale * .8);
-    this.tweens.add({ targets: enemy.sprite, scaleX: scale, scaleY: scale, duration: 210, ease: 'Back.Out' });
+    const bodyParts = [enemy.sprite, enemy.shadow, enemy.label, enemy.ring, enemy.healthBar];
+    this.tweens.killTweensOf(bodyParts);
+    for (const part of bodyParts) part.setAlpha(1);
+    const scaleX = (enemy.boss ? 96 : enemy.miniBoss ? 55 : 43) / enemy.sprite.frame.realWidth;
+    const scaleY = (enemy.boss ? 106 : enemy.miniBoss ? 64 : 53) / enemy.sprite.frame.realHeight;
+    enemy.sprite.setScale(scaleX * 1.22, scaleY * .8);
+    this.tweens.add({ targets: enemy.sprite, scaleX, scaleY, duration: 210, ease: 'Back.Out' });
     enemy.staggerUntil = Math.max(enemy.staggerUntil, this.clock + (heavy ? 330 : 180));
     enemy.chargeUntil = 0;
     const away = Math.atan2(y - this.player.y, x - this.player.x);
-    const force = (heavy ? .44 : .27) * (enemy.boss ? .25 : 1);
+    const force = enemy.boss ? 0 : (heavy ? .44 : .27);
     enemy.knockbackX = Math.cos(away) * force; enemy.knockbackY = Math.sin(away) * force;
   }
 
   private kill(enemy: Enemy) {
+    if (enemy.dead) return;
+    const wasGuarded = this.isBossRoom() && this.bossGuarded();
     enemy.dead = true; this.kills++; this.score += enemy.boss ? 800 : 35;
+    if (enemy.miniBoss) {
+      this.score += 100; this.pendingBossRewards++; this.bossAutoFire = false;
+    }
+    if (!enemy.boss && this.isBossRoom()) {
+      this.bossRoundKills++;
+      if (wasGuarded && !this.bossGuarded()) {
+        const boss = this.enemies.find(item => item.boss && !item.dead);
+        if (boss) {
+          boss.label.setText(`${boss.word.meaning} · 봉인 노출`).setColor('#ffe0a0');
+          boss.ring.setStrokeStyle(3, 0xffcf80, .9);
+          this.banner('BOSS EXPOSED', '지원군은 계속 온다 · 같은 단어로 보스 공격!');
+        }
+        this.attackTarget = null;
+      }
+    }
     if (this.lockedTarget === enemy) this.lockedTarget = null;
     if (this.attackTarget === enemy) this.attackTarget = null;
-    this.tweens.killTweensOf(enemy.sprite);
+    this.tweens.killTweensOf([enemy.sprite, enemy.shadow, enemy.label, enemy.ring, enemy.healthBar]);
     this.burst(enemy.sprite.x, enemy.sprite.y, enemy.boss ? 0xe8bb75 : 0xafa0d7, enemy.boss ? 50 : 12);
-    if (!enemy.boss) {
+    if (!enemy.boss && !this.isBossRoom()) {
       for (let i = 0; i < 3; i++) this.gems.push({
         object: this.add.rectangle(enemy.sprite.x + (i - 1) * 14, enemy.sprite.y + (i % 2 ? -8 : 8), 8, 8, 0x9cf4e3).setRotation(Math.PI / 4).setStrokeStyle(1.5, 0xf1fff8).setDepth(920),
         born: this.clock, value: 4,
       });
     }
-    enemy.sprite.destroy(); enemy.shadow.destroy(); enemy.label.destroy(); enemy.ring.destroy();
+    enemy.sprite.destroy(); enemy.shadow.destroy(); enemy.label.destroy(); enemy.ring.destroy(); enemy.healthBar.destroy();
   }
 
   private updateGems(dt: number) {
@@ -619,7 +902,23 @@ export class DungeonScene extends Phaser.Scene {
     enemy.knockbackX *= drag; enemy.knockbackY *= drag;
     const distance = Phaser.Math.Distance.Between(sprite.x, sprite.y, this.player.x, this.player.y);
     const angle = Math.atan2(this.player.y - sprite.y, this.player.x - sprite.x);
-    if (this.clock >= enemy.staggerUntil) {
+    if (enemy.boss) {
+      const field = this.defenseField();
+      sprite.setPosition(field.bossX, field.midY);
+      if (!this.bossTransition && this.clock >= enemy.attackAt) this.launchBossMinion(enemy);
+    } else if (this.isBossRoom()) {
+      // March along the road, passing the hero rather than chasing or charging.
+      const others = this.enemies.filter(other => !other.dead && !other.boss && other !== enemy && (enemy.miniBoss || other.miniBoss));
+      const rear = others.filter(other => other.sprite.x > sprite.x).sort((a, b) => a.sprite.x - b.sprite.x)[0];
+      if (rear) sprite.x = Math.min(sprite.x, rear.sprite.x - MINI_BOSS_GAP);
+      if (this.clock >= enemy.staggerUntil) {
+        const front = others.filter(other => other.sprite.x < sprite.x).sort((a, b) => b.sprite.x - a.sprite.x)[0];
+        const nextX = sprite.x - Math.min(.065, .045 + this.bossIndex * .002) * dt;
+        sprite.x = front ? Math.min(sprite.x, Math.max(nextX, front.sprite.x + MINI_BOSS_GAP)) : nextX;
+      }
+      sprite.y = this.defenseField().midY + (enemy.lane ?? 0) * this.defenseField().laneGap;
+      if (sprite.x <= this.defenseField().goalX) { this.breachGoal(enemy); return; }
+    } else if (this.clock >= enemy.staggerUntil) {
       let speed = enemy.boss ? .038 : enemy.kind === 'chaser' ? .06 + this.room * .005 : enemy.kind === 'charger' ? .032 : .025;
       if (enemy.kind === 'caster' && distance < 250) speed = -.025;
       if (enemy.chargeUntil > this.clock) {
@@ -637,23 +936,37 @@ export class DungeonScene extends Phaser.Scene {
           else if (enemy.kind === 'caster') { this.enemyShot(sprite.x, sprite.y, angle, .18); enemy.attackAt = this.clock + 2800; }
         }
       }
-      if (enemy.boss && Math.floor(this.clock / 2400) !== Math.floor((this.clock - dt) / 2400)) {
-        for (let i = 0; i < 8; i++) this.enemyShot(sprite.x, sprite.y, angle + i * Math.PI / 4, .14);
-      }
-      if (distance < (enemy.boss ? 52 : 30)) this.hurt(enemy.boss ? 16 : 9);
+      if (distance < 30) this.hurt(9);
     }
-    sprite.x = Phaser.Math.Clamp(sprite.x, 92, this.arenaWidth - 92); sprite.y = Phaser.Math.Clamp(sprite.y, this.arenaTop, this.arenaBottom - 25);
+    sprite.x = Phaser.Math.Clamp(sprite.x, 92, this.arenaWidth - 92);
+    if (!this.isBossRoom()) sprite.y = Phaser.Math.Clamp(sprite.y, this.arenaTop, this.arenaBottom - 25);
     // Push overlapping enemies apart, keeping their labels legible.
     for (const other of this.enemies) {
-      if (other === enemy || other.dead) continue;
+      if (this.isBossRoom() || enemy.boss || other === enemy || other.dead) continue;
       const dx = sprite.x - other.sprite.x, dy = sprite.y - other.sprite.y;
       const separation = Math.hypot(dx, dy);
-      if (separation > 0 && separation < 75) { sprite.x += dx / separation * .035 * dt; sprite.y += dy / separation * .035 * dt; }
+      if (separation > 0 && separation < 75) {
+        sprite.x += dx / separation * .035 * dt; sprite.y += dy / separation * .035 * dt;
+      }
     }
-    sprite.setDepth(sprite.y).setFlipX(this.player.x < sprite.x);
+    sprite.setDepth(sprite.y).setFlipX(this.isBossRoom() || this.player.x < sprite.x);
     enemy.shadow.setPosition(sprite.x, sprite.y + (enemy.boss ? 39 : 18)).setDepth(sprite.y - 2);
     enemy.ring.setPosition(sprite.x, sprite.y).setDepth(sprite.y + 1).setAlpha(.75 + Math.sin(this.clock / 400) * .15);
-    enemy.label.setPosition(sprite.x, sprite.y - (enemy.boss ? 64 : 34));
+    this.drawEnemyHealth(enemy);
+  }
+
+  private breachGoal(enemy: Enemy) {
+    if (enemy.dead || this.finished) return;
+    enemy.dead = true; this.bossLeaks++; this.score -= 50;
+    if (this.lockedTarget === enemy) this.lockedTarget = null;
+    if (this.attackTarget === enemy) this.attackTarget = null;
+    const parts = [enemy.sprite, enemy.shadow, enemy.label, enemy.ring, enemy.healthBar];
+    this.tweens.killTweensOf(parts);
+    this.burst(enemy.sprite.x, enemy.sprite.y, 0xef8997, 10);
+    this.floatText(enemy.sprite.x + 30, enemy.sprite.y - 30, '돌파! −50점', '#ffb3a1');
+    parts.forEach(part => part.destroy());
+    this.emit({ type: 'toast', text: '골인선 돌파! 생명력 −12 · 점수 −50' });
+    this.hurt(12, true);
   }
 
   private enemyShot(x: number, y: number, angle: number, speed: number) {
@@ -663,6 +976,21 @@ export class DungeonScene extends Phaser.Scene {
 
   private updateShots(dt: number) {
     this.shots = this.shots.filter(shot => {
+      if (shot.word && this.pendingBossRewards) { shot.object.destroy(); return false; }
+      const previousX = shot.object.x, previousY = shot.object.y;
+      if (shot.guided && shot.targetWordId) {
+        if (!shot.target || shot.target.dead) {
+          shot.target = this.enemies.filter(enemy => !enemy.dead && (!shot.targetWordId || enemy.word.id === shot.targetWordId) && (!enemy.boss || !this.bossGuarded())).sort((a, b) =>
+            Math.hypot(a.sprite.x - previousX, a.sprite.y - previousY) - Math.hypot(b.sprite.x - previousX, b.sprite.y - previousY))[0];
+        }
+        if (shot.target && !shot.target.dead) {
+          const desired = Math.atan2(shot.target.sprite.y - previousY, shot.target.sprite.x - previousX);
+          const direction = Phaser.Math.Angle.RotateTo(Math.atan2(shot.vy, shot.vx), desired, .004 * shot.guided * dt);
+          const speed = Math.hypot(shot.vx, shot.vy);
+          shot.vx = Math.cos(direction) * speed; shot.vy = Math.sin(direction) * speed;
+          shot.object.setRotation(direction);
+        }
+      }
       shot.object.x += shot.vx * dt; shot.object.y += shot.vy * dt;
       if (this.clock > shot.expires || shot.object.x < 60 || shot.object.x > this.arenaWidth - 60 || shot.object.y < 90 || shot.object.y > this.arenaBottom + 25) { shot.object.destroy(); return false; }
       if (shot.word) {
@@ -671,10 +999,29 @@ export class DungeonScene extends Phaser.Scene {
           const trail = this.add.circle(shot.object.x, shot.object.y, shot.word.kind === 'sword' ? 6 : 3, Phaser.Display.Color.HexStringToColor(COLORS[shot.word.kind]).color, .55).setDepth(899);
           this.tweens.add({ targets: trail, alpha: 0, scale: .2, duration: 160, onComplete: () => trail.destroy() });
         }
-        const target = this.enemies.find(enemy => !enemy.dead && !shot.struck?.has(enemy) && (!shot.secondary || !enemy.shielded) && Phaser.Math.Distance.Between(shot.object.x, shot.object.y, enemy.sprite.x, enemy.sprite.y) < (enemy.boss ? 48 : shot.word!.kind === 'sword' ? 36 : 25));
+        // Resolve the first physical collision, even if the boss was created
+        // before a minion that now stands in front of it.
+        let target: Enemy | undefined, firstHit = Infinity;
+        const dx = shot.object.x - previousX, dy = shot.object.y - previousY, lengthSquared = dx * dx + dy * dy || 1;
+        for (const enemy of this.enemies) {
+          if (enemy.dead || shot.struck?.has(enemy) || (shot.secondary && enemy.shielded)) continue;
+          const projection = ((enemy.sprite.x - previousX) * dx + (enemy.sprite.y - previousY) * dy) / lengthSquared;
+          const t = Phaser.Math.Clamp(projection, 0, 1);
+          const radius = enemy.boss ? 48 : shot.word.kind === 'sword' ? 36 : 25;
+          if (Phaser.Math.Distance.Between(previousX + dx * t, previousY + dy * t, enemy.sprite.x, enemy.sprite.y) >= radius) continue;
+          const perpendicular = Math.hypot(enemy.sprite.x - previousX - dx * projection, enemy.sprite.y - previousY - dy * projection);
+          const entry = Math.max(0, projection - Math.sqrt(Math.max(0, radius * radius - perpendicular * perpendicular) / lengthSquared));
+          if (entry < firstHit) { firstHit = entry; target = enemy; }
+        }
         if (target) {
-          this.strike(target, shot.word, shot.secondary); shot.struck?.add(target);
-          if ((shot.pierce ?? 0) > 0 && !target.shielded) { shot.pierce!--; shot.secondary = true; return true; }
+          this.strike(target, shot.word, shot.secondary, shot.attackId); shot.struck?.add(target);
+          if ((shot.pierce ?? 0) > 0 && !target.shielded && (!shot.bossFinisher || shot.word.id === target.word.id)) {
+            shot.pierce!--;
+            // The exposed boss needs a primary, word-checked hit. Its finishing
+            // shot stays primary as it passes matching reinforcements.
+            if (!shot.bossFinisher) shot.secondary = true;
+            return true;
+          }
           shot.object.destroy(); return false;
         }
       } else if (Phaser.Math.Distance.Between(shot.object.x, shot.object.y, this.player.x, this.player.y) < 21) {
@@ -684,8 +1031,8 @@ export class DungeonScene extends Phaser.Scene {
     });
   }
 
-  private hurt(amount: number) {
-    if (this.clock < this.invulnerableUntil || this.finished) return;
+  private hurt(amount: number, wrongAnswer = false) {
+    if ((!wrongAnswer && this.clock < this.invulnerableUntil) || this.finished) return;
     this.hp = Math.max(0, this.hp - amount); this.invulnerableUntil = this.clock + 850; this.combo = 0; this.charge = 0;
     this.audio.play('hurt'); this.cameras.main.shake(100, .003); this.floatText(this.player.x, this.player.y - 30, `−${amount}`, '#ff8a99');
     if (this.hp === 0) this.finish(false);
@@ -708,7 +1055,7 @@ export class DungeonScene extends Phaser.Scene {
   }
 
   private floatText(x: number, y: number, message: string, color: string) {
-    const text = this.add.text(x, y, message, { fontFamily: FONT, fontSize: message.startsWith('SHATTER') ? '24px' : '21px', fontStyle: 'bold', color, stroke: '#0b1018', strokeThickness: 5 }).setOrigin(.5).setScale(1.4).setDepth(1001);
+    const text = this.add.text(x, y, message, { resolution: 3, fontFamily: FONT, fontSize: message.startsWith('SHATTER') ? '24px' : '21px', fontStyle: 'bold', color, stroke: '#0b1018', strokeThickness: 5 }).setOrigin(.5).setScale(1.4).setDepth(1001);
     this.tweens.add({ targets: text, scale: 1, duration: 170, ease: 'Back.Out' });
     this.tweens.add({ targets: text, y: y - 52, alpha: 0, delay: 120, duration: 680, onComplete: () => text.destroy() });
   }
@@ -718,32 +1065,48 @@ export class DungeonScene extends Phaser.Scene {
       roomName: this.roomTitle(), words: this.equipped, slot: this.slot, remaining: this.enemies.filter(enemy => !enemy.dead).length + this.spawnQueue.length + Number(Boolean(this.spawnWarning)),
       elapsed: this.elapsed, dash: Math.max(0, Math.min(1, 1 - (this.nextDash - this.clock) / (1300 / this.haste))),
       boss: this.room >= this.groups.length, bossSeals: this.bossIndex, totalSeals: this.words.length,
-      environment: this.room >= this.groups.length ? 'astral' : ENVIRONMENTS[this.room % 4],
+      environment: this.room >= this.groups.length ? 'defense' : ENVIRONMENTS[this.room % 4],
       alive: this.enemies.filter(enemy => !enemy.dead).length, incoming: this.spawnQueue.length + Number(Boolean(this.spawnWarning)),
       spawnEvery: spawnInterval(this.clock - this.roomStarted, this.room) / 1000, nextSide: this.spawnWarning?.order.side ?? null,
       level: this.level, xp: this.xp, xpNeeded: experienceNeeded(this.level), upgrades: { ...this.weaponLevels }, attackBoost: this.attackBoost, haste: this.haste,
-      burst: Math.max(0, (this.burstUntil - this.clock) / 1000), charge: this.charge };
+      burst: Math.max(0, (this.burstUntil - this.clock) / 1000), charge: this.charge,
+      mode: this.mode, bossArrows: this.bossArrows, bossMinions: this.isBossRoom() ? this.bossMinionsRemaining() : 0,
+      bossColumns: this.bossColumns(), bossRoundKills: this.bossRoundKills, bossKillGoal: this.bossKillGoal(),
+      bossFireInterval: 700 / this.bossFireSpeed, bossGuided: this.bossGuided, bossLeaks: this.bossLeaks,
+      bossAutoFire: this.bossAutoFire, miniBosses: this.enemies.filter(enemy => !enemy.dead && enemy.miniBoss).length };
   }
   private getAttackTarget(): Enemy | null {
     if (this.lockedTarget && !this.lockedTarget.dead) return this.lockedTarget;
     // Keep finishing the same creature after knockback instead of accidentally
     // switching to a different meaning shield during a held Space attack.
     const retentionRange = this.equipped[this.slot].kind === 'bow' ? 700 : 160;
-    if (this.attackTarget && !this.attackTarget.dead && Phaser.Math.Distance.Between(this.player.x, this.player.y, this.attackTarget.sprite.x, this.attackTarget.sprite.y) < retentionRange) return this.attackTarget;
-    return this.enemies.filter(enemy => !enemy.dead).sort((a, b) =>
+    const guardedBoss = this.isBossRoom() && this.bossGuarded();
+    if (this.isBossRoom() && !guardedBoss && !this.bossTransition) {
+      const boss = this.enemies.find(enemy => enemy.boss && !enemy.dead && this.inFacingDirection(enemy));
+      if (boss) return boss;
+    }
+    if (this.isBossRoom()) return this.enemies.filter(enemy => !enemy.dead && !enemy.boss && this.inFacingDirection(enemy)).sort((a, b) => Phaser.Math.Distance.Between(this.player.x, this.player.y, a.sprite.x, a.sprite.y) - Phaser.Math.Distance.Between(this.player.x, this.player.y, b.sprite.x, b.sprite.y))[0] ?? null;
+    if (this.attackTarget && !this.attackTarget.dead && !(guardedBoss && this.attackTarget.boss) && Phaser.Math.Distance.Between(this.player.x, this.player.y, this.attackTarget.sprite.x, this.attackTarget.sprite.y) < retentionRange) return this.attackTarget;
+    return this.enemies.filter(enemy => !enemy.dead && !(guardedBoss && enemy.boss)).sort((a, b) =>
       Phaser.Math.Distance.Between(this.player.x, this.player.y, a.sprite.x, a.sprite.y) - Phaser.Math.Distance.Between(this.player.x, this.player.y, b.sprite.x, b.sprite.y))[0] ?? null;
+  }
+  private inFacingDirection(enemy: Enemy) {
+    const direction = Math.atan2(enemy.sprite.y - this.player.y, enemy.sprite.x - this.player.x);
+    return Math.abs(Phaser.Math.Angle.Wrap(direction - this.angle)) <= .6;
   }
   private showMovementMarker(x: number, y: number) {
     this.movementMarker.clear().lineStyle(1.5, 0x98f6d4, .7).strokeEllipse(x, y, 24, 10);
     this.movementMarker.lineBetween(x - 5, y, x + 5, y).lineBetween(x, y - 3, x, y + 3);
   }
-  private sendState() { this.emit({ type: 'state', state: this.snapshot() }); }
+  private sendState() { this.drawPlayerHealth(); this.emit({ type: 'state', state: this.snapshot() }); }
 }
 
 export function mountGame(parent: string, emit: (event: GameEvent) => void) {
-  const scene = new DungeonScene(emit);
-  const game = new Phaser.Game({ type: Phaser.AUTO, parent, width: WIDTH, height: HEIGHT, backgroundColor: '#10131b', pixelArt: true,
+  const bounds = document.getElementById(parent)!.getBoundingClientRect();
+  const density = renderingScale(bounds.width, bounds.height);
+  const scene = new DungeonScene(emit, density);
+  const game = new Phaser.Game({ type: Phaser.AUTO, parent, width: WIDTH * density, height: HEIGHT * density, backgroundColor: '#10131b', pixelArt: false,
     scale: { mode: Phaser.Scale.EXPAND, autoCenter: Phaser.Scale.CENTER_BOTH }, scene,
-    input: { mouse: { preventDefaultWheel: false } }, render: { antialias: false }, banner: false });
+    input: { mouse: { preventDefaultWheel: false } }, render: { antialias: true, antialiasGL: true, roundPixels: false, mipmapFilter: 'LINEAR_MIPMAP_LINEAR' }, banner: false });
   return { game, scene };
 }

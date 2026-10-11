@@ -1,0 +1,7 @@
+{
+  "tool": "built-in image_gen",
+  "asset": "archive-banner.png",
+  "actualSize": [1536, 1024],
+  "prompt": "Use case: stylized-concept. Asset type: high-resolution wide fantasy RPG UI header illustration, landscape 1536x1024.\nPrimary request: an enchanted archive desk in a premium fantasy dungeon game, gorgeous polished painterly 3D illustration with tactile materials. On the right third a large open ancient spellbook rests on dark carved wood, gold-edged ivory parchment pages with very subtle non-readable magical markings, mint-teal light rising from the book and a delicate floating crystal, small brass quill and inkwell, warm golden candlelight. Behind it blurred shelves and dark forest-green stone of a magical library. LEFT TWO THIRDS intentionally very dark uncluttered deep green/black negative space, a few dim dust motes only; UI heading will be overlaid there in code. Rich bronze filigree and weathered leather book detail, soft cinematic light, mint/gold highlights matching ornate game skill medallions. Wide composition, book and candle wholly within right side with comfortable margins. No readable words, no letters, no text, no UI labels, no buttons, no characters, no watermark. This image is used as a subdued decorative banner behind a real editable game codex and question-entry interface; center and left must remain quiet and dark.",
+  "background": "opaque"
+}

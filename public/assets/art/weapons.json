@@ -1,0 +1,72 @@
+{
+  "frames": {
+    "sword": {
+      "frame": {
+        "x": 265,
+        "y": 27,
+        "w": 199,
+        "h": 663
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 199,
+        "h": 663
+      },
+      "sourceSize": {
+        "w": 199,
+        "h": 663
+      }
+    },
+    "bow": {
+      "frame": {
+        "x": 991,
+        "y": 7,
+        "w": 171,
+        "h": 698
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 171,
+        "h": 698
+      },
+      "sourceSize": {
+        "w": 171,
+        "h": 698
+      }
+    },
+    "hammer": {
+      "frame": {
+        "x": 1648,
+        "y": 34,
+        "w": 342,
+        "h": 649
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 342,
+        "h": 649
+      },
+      "sourceSize": {
+        "w": 342,
+        "h": 649
+      }
+    }
+  },
+  "meta": {
+    "image": "weapons.png",
+    "size": {
+      "w": 2172,
+      "h": 724
+    },
+    "scale": "1"
+  }
+}
