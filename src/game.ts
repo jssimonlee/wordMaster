@@ -3,6 +3,8 @@ import { COLORS, DEFAULT_WORDS, ROOM_NAMES, wordGroups, type Word, type WeaponKi
 import { resolveStrike } from './progress';
 import { GameAudio } from './audio';
 import { renderingScale } from './rendering';
+import { animateWalking, newWalk, prepareWalking, type WalkState } from './walking';
+import type { TypingView } from './typing';
 import { ENVIRONMENTS, paintEnvironment, paintDefenseEnvironment, type Environment } from './environments';
 import { arrowCount, bossUpgradeOptions, emptyWeaponLevels, experienceNeeded, spawnInterval, upgradeOptions, ROOM_REWARD_INTERVAL, BOSS_UPGRADE_INTERVAL, MINI_BOSS_REWARD_INTERVAL, type UpgradeId, type UpgradeOption, type BossUpgradeId, type BossUpgradeOption } from './upgrades';
 
@@ -11,8 +13,9 @@ export const HEIGHT = 620;
 const FONT = '"Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
 const MINI_BOSS_GAP = 160;
 type EnemyKind = 'chaser' | 'charger' | 'caster';
-export type RunMode = 'campaign' | 'boss';
+export type RunMode = 'campaign' | 'boss' | 'typing';
 interface Enemy {
+  walk: WalkState;
   sprite: Phaser.GameObjects.Sprite;
   shadow: Phaser.GameObjects.Ellipse;
   label: Phaser.GameObjects.Text;
@@ -47,9 +50,11 @@ export interface Snapshot {
   mode: RunMode; bossArrows: number; bossMinions: number; bossColumns: number; bossRoundKills: number; bossKillGoal: number;
   bossFireInterval: number; bossGuided: number; bossLeaks: number;
   bossAutoFire: boolean; miniBosses: number;
+  typing?: { round: number; reversed: boolean; spawned: number; quota: number; nextSpawn: number; best: number | null };
 }
 export type GameEvent =
   | { type: 'ready' }
+  | { type: 'typing'; view: TypingView; clearInput?: boolean }
   | { type: 'state'; state: Snapshot }
   | { type: 'attempt'; word: Word; result: 'correct' | 'wrong' }
   | { type: 'toast'; text: string }
@@ -148,10 +153,12 @@ export class DungeonScene extends Phaser.Scene {
   private burstUntil = 0;
   private charge = 0;
 
-  constructor(emit: (event: GameEvent) => void, private renderScale = 1) { super('dungeon'); this.emit = emit; }
+  constructor(emit: (event: GameEvent) => void, private renderScale = 1, key = 'dungeon') { super(key); this.emit = emit; }
 
   preload() {
     for (const theme of ['defense', 'meadow', 'library', 'forge', 'frost']) this.load.image(`background-${theme}`, `/assets/art/${theme}.png`);
+    this.load.image('background-tempest', '/assets/art/tempest.png');
+    this.load.image('lightning-mage', '/assets/art/lightning-mage.png');
     for (const atlas of ['characters', 'weapons']) {
       this.load.image(`${atlas}-source`, `/assets/art/${atlas}.png`);
       this.load.json(`${atlas}-frames`, `/assets/art/${atlas}.json`);
@@ -160,6 +167,7 @@ export class DungeonScene extends Phaser.Scene {
 
   create() {
     for (const atlas of ['characters', 'weapons']) this.prepareAtlas(atlas);
+    prepareWalking(this);
     this.backdrop = this.add.image(0, 0, 'background-meadow').setOrigin(0).setDepth(-20);
     this.floor = this.add.graphics().setDepth(-10);
     this.decoration = this.add.container(0, 0).setDepth(-5);
@@ -527,6 +535,7 @@ export class DungeonScene extends Phaser.Scene {
 
   private spawnEnemy(word: Word, kind: EnemyKind, x: number, y: number, boss = false) {
     const enemy: Enemy = {
+      walk: newWalk(this.enemies.length + this.clock / 1000),
       sprite: this.add.sprite(x, y, 'characters', boss ? 'boss' : kind).setDisplaySize(boss ? 96 : 43, boss ? 106 : 53),
       shadow: this.add.ellipse(x, y + 15, boss ? 80 : 37, boss ? 25 : 12, 0x000000, .4),
       label: this.add.text(x, y - (boss ? 65 : 41), word.meaning, { resolution: 3, fontFamily: FONT, fontSize: word.format === 'quiz' && word.meaning.length > 30 ? boss ? '16px' : '12px' : boss ? '19px' : '16px', fontStyle: 'bold', color: '#ebe7f6', backgroundColor: '#171724', padding: { x: 11, y: 6 }, align: 'center', wordWrap: { width: boss ? 340 : word.format === 'quiz' ? 220 : 175, useAdvancedWrap: word.format === 'quiz' } }).setOrigin(.5, 1).setDepth(800),
@@ -945,6 +954,7 @@ export class DungeonScene extends Phaser.Scene {
     sprite.x += enemy.knockbackX * dt; sprite.y += enemy.knockbackY * dt;
     const drag = Math.exp(-dt / 95);
     enemy.knockbackX *= drag; enemy.knockbackY *= drag;
+    const previousX = sprite.x, previousY = sprite.y;
     const distance = Phaser.Math.Distance.Between(sprite.x, sprite.y, this.player.x, this.player.y);
     const angle = Math.atan2(this.player.y - sprite.y, this.player.x - sprite.x);
     if (enemy.boss) {
@@ -996,6 +1006,7 @@ export class DungeonScene extends Phaser.Scene {
     }
     sprite.setDepth(sprite.y).setFlipX(this.isBossRoom() || this.player.x < sprite.x);
     enemy.shadow.setPosition(sprite.x, sprite.y + (enemy.boss ? 39 : 18)).setDepth(sprite.y - 2);
+    if (!enemy.boss) animateWalking(sprite, enemy.shadow, enemy.walk, enemy.miniBoss ? 'miniboss' : enemy.kind, this.clock >= enemy.staggerUntil ? Math.hypot(sprite.x - previousX, sprite.y - previousY) : 0, dt);
     enemy.ring.setPosition(sprite.x, sprite.y).setDepth(sprite.y + 1).setAlpha(.75 + Math.sin(this.clock / 400) * .15);
     this.drawEnemyHealth(enemy);
   }
@@ -1146,12 +1157,12 @@ export class DungeonScene extends Phaser.Scene {
   private sendState() { this.drawPlayerHealth(); this.emit({ type: 'state', state: this.snapshot() }); }
 }
 
-export function mountGame(parent: string, emit: (event: GameEvent) => void) {
+export function mountGame(parent: string, emit: (event: GameEvent) => void, extraScenes: Phaser.Scene[] = []) {
   const bounds = document.getElementById(parent)!.getBoundingClientRect();
   const density = renderingScale(bounds.width, bounds.height);
   const scene = new DungeonScene(emit, density);
   const game = new Phaser.Game({ type: Phaser.AUTO, parent, width: WIDTH * density, height: HEIGHT * density, backgroundColor: '#10131b', pixelArt: false,
-    scale: { mode: Phaser.Scale.EXPAND, autoCenter: Phaser.Scale.CENTER_BOTH }, scene,
+    scale: { mode: Phaser.Scale.EXPAND, autoCenter: Phaser.Scale.CENTER_BOTH }, scene: [scene, ...extraScenes],
     input: { mouse: { preventDefaultWheel: false } }, render: { antialias: true, antialiasGL: true, roundPixels: false, mipmapFilter: 'LINEAR_MIPMAP_LINEAR' }, banner: false });
   return { game, scene };
 }

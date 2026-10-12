@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 
 export const ENVIRONMENTS = ['meadow', 'library', 'forge', 'frost', 'astral'] as const;
-export type Environment = typeof ENVIRONMENTS[number] | 'defense';
+export type Environment = typeof ENVIRONMENTS[number] | 'defense' | 'tempest';
 const W = 1040, H = 620;
 
 export interface DefenseField { width: number; height: number; goalX: number; bossX: number; playerX: number; midY: number; laneGap: number; roadTop: number; roadBottom: number; }

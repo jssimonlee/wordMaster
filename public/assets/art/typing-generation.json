@@ -1,0 +1,14 @@
+{
+  "tool": "built-in image_gen",
+  "assets": [
+    {
+      "file": "tempest.png",
+      "prompt": "Use case: stylized-concept. Asset type: production high-resolution environment background for an overhead 2D fantasy RPG typing defense game named Hall of White Thunder. Landscape 1536x1024. Primary request: a beautiful ruined moonlit storm observatory with broad uninterrupted pale blue-gray stone road running horizontally from left edge to right edge across the central 55 percent. Walkable open center intentionally quiet and low contrast for small creature sprites, readable labels and brilliant white lightning beams. Elevated nearly top-down orthographic game camera, no horizon. Ancient carved arcane pillars, pale luminous quartz crystals, metallic lightning rods, weathered floor inlays, mist and scattered moss strictly along the top and bottom outer borders. A distant dark arcane summoning dais at the extreme right border, subtle ornamental silver boundary gateway on the extreme left border. Polished painterly modern indie RPG background, detailed tactile stone and subdued silver/indigo/teal palette, gently warm pale gold accents, atmospheric moonlight, crisp illustration, not pixel art. Composition must be usable as one full game arena. No characters, no monsters, no UI, no text, no letters, no portals in the four corners, no huge central emblem, no obstacles in the open road, no watermark."
+    },
+    {
+      "file": "lightning-mage.png",
+      "transparent": true,
+      "prompt": "Use case: stylized-concept. Asset type: production full-body mage character sprite for a high-resolution top-down fantasy action RPG. One single character centered on a genuinely transparent background, square 1024x1024. Primary request: a charming yet powerful adult lightning wizard facing right, viewed from a slightly elevated three-quarter isometric game camera, whole figure from pointed hood to boots visible, compact clear silhouette, long flowing deep midnight-blue and ivory layered robes with tasteful silver runic trim, pale leather belt, short swept cloak, one gloved arm reaching forward to the right to channel electricity and other hand holding a slim carved silver staff with glowing white crystal near the forward hand. Noble focused face, pale hair visible under hood, confident planted feet, ready casting pose. Polished modern hand-painted 3D indie game sprite matching detailed fantasy environments, crisp edges, rich material shading, soft directional light, readable at 90px high. White sparks tightly confined around the casting hand and staff crystal, no large halo or surrounding lightning that would obscure the silhouette. Character fills 85 percent of image height with comfortable transparent margins. No ground, no shadow painted into the background, no pedestal, no text, no labels, no watermark, no sprite grid, no multiple characters, not pixel art."
+    }
+  ]
+}

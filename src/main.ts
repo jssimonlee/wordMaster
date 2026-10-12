@@ -1,10 +1,14 @@
 import './style.css';
 import { COLORS, DEFAULT_WORDS, KIND_NAMES, parseMemoryPairs, serializeMemoryPairs, type WeaponKind, type Word } from './data';
+import { nextDeckName, prepareDeckSave, selectDeck, selectedDeck } from './decks';
 import { loadProgress, mastery, recordAttempt, saveProgress } from './progress';
 import { mountGame, type DungeonScene, type GameEvent, type RunMode, type Snapshot } from './game';
 import { BOSS_UPGRADE_INTERVAL, experienceNeeded, type UpgradeId, type UpgradeOption, type BossUpgradeId, type BossUpgradeOption } from './upgrades';
+import { TypingScene } from './typing-game';
+import { DEFAULT_TYPING_SETTINGS, loadTypingSettings, saveTypingSettings, validateTypingSettings, TYPING_MAP_NAME, type TypingView } from './typing';
 
 const paths: Record<string, string> = {
+  home: '<path d="m3 10 9-7 9 7v11h-6v-7H9v7H3V10Z"/>',
   sword: '<path d="m16 3 5 0 0 5-11 11-5-5L16 3Z"/><path d="m4 13 7 7M3 21l4-4"/>',
   bow: '<path d="M5 3c19 0 19 18 0 18l5-9-5-9Z"/><path d="M5 12h16m-4-4 4 4-4 4"/>',
   hammer: '<path d="m8 11 5 5-7 7-5-5 7-7Z"/><path d="m8 6 5-5 10 10-5 5L8 6Z"/>',
@@ -45,6 +49,10 @@ let upgradeSelectionReady = false;
 let runCorrect = 0, runWrong = 0, runHints = 0;
 let codexTab: 'default' | 'custom' = 'default';
 let customDraft = progress.custom.length ? serializeMemoryPairs(progress.custom) : undefined;
+let customDeckId = progress.activeDeckId;
+let customName = selectedDeck(progress)?.name ?? nextDeckName(progress);
+const memoryDrafts = new Map<string, { name: string; text: string }>();
+let clearTypingInput: () => void = () => {};
 
 function runeArt(kind: WeaponKind, cls = '') {
   return `<span class="rune-art ${kind} ${cls}" aria-hidden="true" style="--rune-x:${{ sword: 0, bow: 50, hammer: 100 }[kind]}%"></span>`;
@@ -82,8 +90,104 @@ function persist() {
   if (!saveProgress(progress)) el('save-label').textContent = '저장 불가 · 현재 세션만 유지';
 }
 
+function focusBattle() {
+  (activeMode === 'typing' ? el('typing-input') : el('game-canvas'))?.focus({ preventScroll: true });
+}
+
+function renderTypingDock() {
+  el('armory').innerHTML = `<section class="spell-dock" aria-label="타이핑 마법"><div class="spell-caption"><span>${icon('bolt')} 마법 각인</span><span id="typing-chain">모든 일치 적 연결</span></div><div class="spell-entry"><div id="typing-runes" aria-hidden="true">답을 타이핑해 번개를 연결하세요</div><input id="typing-input" aria-label="마법 타이핑" autocomplete="off" autocapitalize="off" spellcheck="false" /></div><div class="spell-heat"><i id="typing-heat"></i></div><div class="spell-footer"><span id="typing-signal" role="status">70%부터 붉게 점화</span><span id="typing-rate">— 초 / 글자</span></div></section>`;
+  const input = el<HTMLInputElement>('typing-input');
+  clearTypingInput = bindTypingInput(input);
+}
+
+function bindTypingInput(input: HTMLInputElement): () => void {
+  let composing = false, committed = '';
+  let attached = true;
+  input.addEventListener('compositionstart', () => { if (!attached || !input.isConnected) return; composing = true; committed = input.value; typingScene.noteTypingKey(); });
+  input.addEventListener('compositionend', () => { if (!attached || !input.isConnected) return; composing = false; typingScene.acceptTyping(input.value); });
+  input.addEventListener('input', event => {
+    if (!attached || !input.isConnected) return;
+    typingScene.acceptTyping(input.value, composing || (event as InputEvent).isComposing, committed);
+  });
+  input.addEventListener('keydown', event => {
+    if (!attached || !input.isConnected) return;
+    if (event.isComposing || composing) return;
+    if (event.key === 'Tab') { event.preventDefault(); event.stopPropagation(); if (overlay === 'hint') hideOverlay(); else showHint(); return; }
+    if (event.key === 'Enter') { event.preventDefault(); typingScene.acceptTyping(input.value, false, input.value, true); return; }
+    if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) typingScene.noteTypingKey();
+  });
+  input.addEventListener('paste', event => { event.preventDefault(); toast('마법은 직접 타이핑해서 완성하세요.'); });
+  const syncScroll = () => { if (!attached) return; const letters = el('typing-runes').firstElementChild as HTMLElement | null; if (letters && input.value) letters.style.transform = `translateX(${-input.scrollLeft}px)`; };
+  input.addEventListener('scroll', syncScroll);
+  input.addEventListener('input', () => requestAnimationFrame(syncScroll));
+  return () => {
+    if (!composing) { input.value = ''; return; }
+    // Detach the completed IME session so its delayed commit cannot re-fire
+    // the old answer or insert its final syllable into the next spell.
+    attached = false;
+    const fresh = input.cloneNode(false) as HTMLInputElement; fresh.value = '';
+    input.replaceWith(fresh); clearTypingInput = bindTypingInput(fresh);
+    if (overlay === 'none' && !modalOpen) fresh.focus({ preventScroll: true });
+  };
+}
+
+function renderTypingView(view: TypingView, clearInput = false) {
+  if (activeMode !== 'typing' || !el('typing-input')) return;
+  if (clearInput) clearTypingInput();
+  const dock = el('typing-runes').closest<HTMLElement>('.spell-dock')!;
+  dock.dataset.valid = String(view.valid); dock.dataset.burning = String(view.progress >= .7 && view.valid);
+  dock.dataset.record = String(view.record); dock.dataset.composing = String(view.composing);
+  const runes = el('typing-runes');
+  if (runes.dataset.value !== view.value) {
+    runes.dataset.value = view.value;
+    runes.innerHTML = view.value ? `<span class="spell-letters">${escape(view.value.normalize('NFC'))}</span>` : '<small>답을 타이핑해 번개를 연결하세요</small>';
+  }
+  el('typing-heat').style.width = `${Math.min(100, view.progress * 100)}%`;
+  el('typing-chain').textContent = view.connected ? `${view.connected}마리 연결 · ${view.capacity < 0 ? '전체 공명' : `최대 ${view.capacity}연쇄`}` : '번개 연결 대기';
+  el('typing-rate').textContent = view.rate === null ? '— 초 / 글자' : `${view.rate.toFixed(3)} 초 / 글자`;
+  el('typing-signal').textContent = view.composing ? '글자 조합 중' : view.ambiguous ? 'Enter로 완성 · 계속 입력하면 긴 답' : view.value && !view.valid ? '연결 끊김 · 지우고 다시 입력' : view.result || (view.progress >= .7 ? '점화 · 마법을 완성하세요!' : '70%부터 붉게 점화');
+}
+
+function updateTypingState(next: Snapshot) {
+  const wave = next.typing!;
+  document.querySelector<HTMLElement>('.game-stage')!.dataset.environment = 'tempest';
+  el('room-index').textContent = String(wave.round).padStart(2, '0'); el('room-title').textContent = TYPING_MAP_NAME;
+  el('room-tag').textContent = wave.reversed ? 'REVERSE' : 'SPELL'; el('room-tag').classList.remove('boss');
+  el('route-fraction').textContent = `${wave.round} / 12 라운드`; el('route').innerHTML = '';
+  el('health-text').textContent = `${next.hp} / 100`; el('health-fill').style.width = `${next.hp}%`;
+  el('health-fill').classList.toggle('low', next.hp <= 30);
+  el('enemy-count').textContent = `필드 ${next.alive} · 소환 ${wave.spawned} / ${wave.quota}`;
+  el('wave-status').textContent = wave.reversed ? '답을 보고 문제 입력 · 반전' : '문제를 보고 답 입력';
+  el('level-text').textContent = `ROUND ${wave.round} / 12`; el('xp-fill').style.width = `${(wave.round - 1) / 12 * 100}%`;
+  el('xp-text').textContent = wave.reversed ? '기억 반전' : '7라운드부터 기억 반전';
+  el('burst-status').textContent = '백색 번개'; el('burst-status').classList.remove('active');
+  document.querySelector('.bottom-hud')!.classList.remove('overdrive');
+  el('build-label').textContent = `돌파 ${next.bossLeaks}회 · ${wave.best === null ? '첫 입력으로 기록 수립' : `최고 ${wave.best.toFixed(3)}초 / 글자`}`;
+  el('combo').textContent = `×${next.combo} COMBO`; el('combo').classList.toggle('hot', next.combo >= 3);
+  const seconds = Math.floor(next.elapsed);
+  el('timer').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  el('score').textContent = next.score.toLocaleString(); el('kills').textContent = String(next.kills);
+  el('accuracy').textContent = runCorrect + runWrong ? `${Math.round(runCorrect / (runCorrect + runWrong) * 100)}%` : '—';
+  el('boss-bar').hidden = true;
+}
+
+function showTypingSettings() {
+  const settings = loadTypingSettings();
+  openModal(`${archiveHeader('', '번개 공명 설정', '')}<div class="archive-body typing-settings"><p>글자당 입력 시간 · 초</p><div class="threshold-grid">${(['triple', 'double', 'single'] as const).map((key, index) => `<label><strong>${3 - index}연쇄</strong><small>${index ? '이하' : '미만'}이면 최대 ${3 - index}마리 폭발</small><input id="threshold-${key}" aria-label="${3 - index}연쇄 기준" type="number" min="0.03" max="2" step="0.01" value="${settings[key]}" /></label>`).join('')}</div><p class="threshold-note">가장 느린 구간은 피해와 화상만 줘요.<br>첫 입력은 기록 수립, 이후 같은 답의 최고 기록 경신은 주변에도 피해를 줘요.</p><p id="threshold-error" class="form-error" role="alert"></p><div class="threshold-actions"><button id="threshold-reset" class="text-button">기본값</button><button id="threshold-save" class="primary-button">설정 적용 ${icon('check')}</button></div></div>`, 'codex');
+  el('threshold-reset').addEventListener('click', () => {
+    for (const key of ['triple', 'double', 'single'] as const) el<HTMLInputElement>(`threshold-${key}`).value = String(DEFAULT_TYPING_SETTINGS[key]);
+  });
+  el('threshold-save').addEventListener('click', () => {
+    const value = { triple: Number(el<HTMLInputElement>('threshold-triple').value), double: Number(el<HTMLInputElement>('threshold-double').value), single: Number(el<HTMLInputElement>('threshold-single').value) };
+    if (!validateTypingSettings(value)) { el('threshold-error').textContent = '0.03~2초 사이에서 3연쇄 < 2연쇄 < 1연쇄 순으로 설정하세요.'; return; }
+    if (!saveTypingSettings(value)) { el('threshold-error').textContent = '설정을 저장하지 못했어요.'; return; }
+    typingScene.updateSettings(value); closeModal();
+  });
+}
+
 function updateState(next: Snapshot) {
   state = next;
+  if (next.mode === 'typing') { updateTypingState(next); return; }
   document.querySelector<HTMLElement>('.game-stage')!.dataset.environment = next.environment;
   el('room-index').textContent = next.mode === 'boss' ? '01' : String(next.room + 1).padStart(2, '0');
   el('room-title').textContent = next.roomName;
@@ -155,6 +259,8 @@ function showStart() {
   el('game-overlay').innerHTML = `<div class="title-screen"><div class="title-crest" aria-hidden="true">${runeArt('sword')}<span></span></div><h1>WORD<span>MASTER</span></h1><h2>기억의 던전</h2><p class="title-instruction">적의 문제에 맞는 답을 무기로 선택하세요.</p><div class="title-modes"><button id="start-button" class="adventure-button" ${ready ? '' : 'disabled'}>${runeArt('sword', 'menu-rune')}<span><strong>${ready ? '첫 던전 입장' : '던전 준비 중…'}</strong><small>네 개의 유적 탐험</small></span>${icon('arrow')}</button><button id="boss-start-button" class="adventure-button defense" ${ready ? '' : 'disabled'}>${runeArt('bow', 'menu-rune')}<span><strong>보스전 바로 도전</strong><small>자동 사격 · 12라운드 디펜스</small></span>${icon('arrow')}</button></div><div class="title-secondary"><button id="title-custom">${icon('plus')} 내 기억 만들기</button><button id="title-codex">${icon('book')} 기억의 도감</button></div><div class="title-controls"><span><kbd>클릭</kbd> 이동 · 조준</span><span><kbd>1 · 2 · 3</kbd> 무기 선택</span><span><kbd>Tab</kbd> 힌트</span></div></div>`;
   el('start-button').addEventListener('click', () => startRun(DEFAULT_WORDS));
   el('boss-start-button').addEventListener('click', () => startRun(DEFAULT_WORDS, 'boss'));
+  el('boss-start-button').insertAdjacentHTML('afterend', `<button id="typing-start-button" class="adventure-button tempest" ${ready ? '' : 'disabled'}><span class="storm-emblem">${icon('bolt')}</span><span><strong>${TYPING_MAP_NAME}</strong><small>타이핑 마법 · 번개 연쇄 · 12라운드</small></span>${icon('arrow')}</button>`);
+  el('typing-start-button').addEventListener('click', () => startRun(DEFAULT_WORDS, 'typing'));
   el('title-custom').addEventListener('click', showCustom);
   el('title-codex').addEventListener('click', showCodex);
 }
@@ -167,8 +273,28 @@ function startRun(words: Word[], mode: RunMode = 'campaign') {
   el('word-count').textContent = String(words.length); el('toast').hidden = true;
   document.querySelector<HTMLElement>('.game-stage')!.dataset.screen = 'playing';
   el('collection-label').textContent = '기억';
-  scene.start(words, mode); el('game-canvas').focus();
+  document.querySelector<HTMLElement>('.game-stage')!.dataset.mode = mode;
+  el('game-canvas').setAttribute('aria-label', mode === 'typing' ? '클릭으로 마법사 이동, 아래 입력창에서 답을 타이핑해 번개 공격, Tab 힌트, Esc 일시정지' : '바닥 클릭 이동, 몬스터 클릭 공격, 스페이스 공격, 1·2·3 무기 교체');
+  if (mode === 'typing') {
+    dungeonScene.setPaused(true); mounted.game.scene.sleep('dungeon');
+    scene = typingScene; renderTypingDock();
+  } else {
+    mounted.game.scene.stop('typing'); mounted.game.scene.wake('dungeon'); scene = dungeonScene;
+  }
+  scene.audio.muted = progress.muted;
+  scene.start(words, mode); focusBattle();
 
+}
+
+function returnToTitle() {
+  scene?.setPaused(true);
+  closeModal(false);
+  clearTimeout(toastTimeout); clearTimeout(upgradeUnlockTimer);
+  upgradeSelectionReady = false;
+  el('upgrade-picker').hidden = true;
+  el('toast').hidden = true;
+  showStart();
+  el('start-button').focus({ preventScroll: true });
 }
 
 function toast(text: string) {
@@ -179,7 +305,7 @@ function toast(text: string) {
 
 function hideOverlay() {
   overlay = 'none'; el('game-overlay').hidden = true;
-  scene?.setPaused(false); el('game-canvas').focus();
+  scene?.setPaused(false); focusBattle();
 }
 
 function showPause() {
@@ -189,16 +315,21 @@ function showPause() {
   el('game-overlay').innerHTML = `<div class="overlay-panel"><div class="overlay-symbol">${icon('pause')}</div><div class="eyebrow">TAKE A BREATH</div><h2>잠시 숨 고르기</h2><p>기억도, 모험도 서두를 필요는 없으니까.</p><button id="resume-button" class="primary-button">${icon('play')} 탐험 계속하기</button><button id="restart-button" class="text-button">현재 단어로 처음부터 다시</button><small>ESC를 눌러 돌아갈 수 있어요</small></div>`;
   el('resume-button').addEventListener('click', hideOverlay);
   el('restart-button').addEventListener('click', () => startRun(activeWords, activeMode));
+  el('restart-button').insertAdjacentHTML('afterend', `<button id="pause-home-button" class="text-button">${icon('home')} 초기 화면으로</button>`);
+  el('pause-home-button').addEventListener('click', returnToTitle);
+  if (activeMode === 'typing') el('resume-button').focus();
 }
 
 function showHint() {
   if (!state || !scene?.isRunning() || overlay !== 'none' || modalOpen) return;
-  const word = state.words[state.slot];
+  const word = activeMode === 'typing' ? typingScene.hint() : state.words[state.slot];
   scene.setPaused(true); overlay = 'hint'; runHints++;
   recordAttempt(progress, word.id, 'hints'); persist(); el('toast').hidden = true;
   el('game-overlay').hidden = false;
   el('game-overlay').innerHTML = `<div class="overlay-panel hint-panel"><div class="eyebrow">A MEMORY REVEALED · 전투 일시정지</div><div class="hint-weapon ${word.kind}">${icon(word.kind)}</div><h2 style="color:${COLORS[word.kind]}">${escape(word.word)}</h2><strong class="hint-meaning">${escape(word.meaning)}</strong>${word.example ? `<blockquote>${escape(word.example)}</blockquote>` : `<p>${word.format === 'quiz' ? '이 문제에는 해설이 아직 없어요.' : '이 단어에는 예문이 아직 없어요.'}</p>`}<p>${word.format === 'quiz' ? '이 답을 장착해 위 문제가 표시된 적을 공격하세요.' : '이 뜻이 적힌 방어막을 공격하면 파괴할 수 있어요.'}</p><button id="hint-close" class="primary-button">기억했어. 다시 싸우기 ${icon('arrow')}</button><small>TAB 또는 ESC로 닫기</small></div>`;
   el('hint-close').addEventListener('click', hideOverlay);
+  if (activeMode === 'typing') el('hint-close').previousElementSibling!.textContent = '이 답을 입력하면 같은 문제가 적힌 적에게 번개가 연결돼요.';
+  if (activeMode === 'typing') el('hint-close').focus();
 }
 
 const upgradeArt: Record<UpgradeId | BossUpgradeId, { cell: number; color: string }> = {
@@ -295,6 +426,7 @@ function showFinish(won: boolean, final: Snapshot) {
   el('game-overlay').innerHTML = `<div class="finish-panel"><div class="overlay-symbol ${won ? 'gold' : ''}">${icon(won ? 'diamond' : 'skull')}</div><div class="eyebrow">${won ? 'THE ARCHIVE IS YOURS' : 'YOUR MEMORY LIVES ON'}</div><h2>${won ? '던전을 정복했습니다.' : '다시 깨어날 시간.'}</h2><p>${won ? `${activeWords.length}개의 기억이 당신의 무기가 되었습니다.` : '이번 탐험에서 익힌 기억과 숙련도는 남아 있습니다.'}</p><div class="finish-stats"><span><strong>${final.score.toLocaleString()}</strong>기억의 조각</span><span><strong>${accuracy}%</strong>정답 적중률</span><span><strong>${runHints}</strong>힌트 사용</span></div>${reviewed.length ? `<div class="review-words"><small>다음 탐험에서 다시 만나 볼 기억</small><div>${reviewed.map(word => `<span>${escape(word.word)} <i>${escape(word.meaning)}</i></span>`).join('')}</div></div>` : ''}<button id="again-button" class="primary-button">${icon('play')} ${won ? '변화한 던전에 다시 도전' : '다시 도전하기'}</button><button id="finish-codex" class="text-button">내 기억 도감 확인하기 ${icon('arrow')}</button></div>`;
   el('again-button').addEventListener('click', () => startRun(activeWords, activeMode));
   el('finish-codex').addEventListener('click', showCodex);
+  if (activeMode === 'typing') el('again-button').focus();
 }
 
 function openModal(content: string, variant: 'standard' | 'codex' | 'workshop' = 'standard') {
@@ -307,7 +439,7 @@ function openModal(content: string, variant: 'standard' | 'codex' | 'workshop' =
 
 function closeModal(resume = true) {
   modalOpen = false; el('modal-layer').hidden = true; el('modal-layer').innerHTML = '';
-  if (resume && overlay === 'none') { scene?.setPaused(false); el('game-canvas').focus(); }
+  if (resume && overlay === 'none') { scene?.setPaused(false); focusBattle(); }
 }
 
 function archiveHeader(_badge: string, title: string, subtitle: string) {
@@ -327,32 +459,84 @@ function showCodex() {
     }).join('') : `<div class="empty-codex">${icon('book')}<strong>${words.length ? '이 기억은 아직 없어요.' : '아직 비어 있는 마법서'}</strong><span>${words.length ? '다른 단어나 문제로 찾아보세요.' : '내 단어나 문제·답을 새겨 나만의 던전을 만들어 보세요.'}</span></div>`;
   }
   renderEntries(); el('codex-search').addEventListener('input', renderEntries);
+  if (codexTab === 'custom' && progress.decks.length) {
+    el('codex-search').closest('.codex-search')!.insertAdjacentHTML('beforebegin', `<label class="codex-memory-select">단어장<select id="codex-memory-deck" aria-label="도감 단어장 선택">${progress.decks.map(deck => `<option value="${escape(deck.id)}" ${deck.id === progress.activeDeckId ? 'selected' : ''}>${escape(deck.name)} · ${deck.words.length}개</option>`).join('')}</select></label>`);
+    el('codex-memory-deck').addEventListener('change', () => {
+      const id = el<HTMLSelectElement>('codex-memory-deck').value, next = selectDeck(progress, id);
+      if (!next || !saveProgress(next)) return;
+      Object.assign(progress, next); customDeckId = id;
+      const draft = memoryDrafts.get(id), deck = selectedDeck(progress)!;
+      customName = draft?.name ?? deck.name; customDraft = draft?.text ?? serializeMemoryPairs(deck.words);
+      showCodex();
+    });
+  }
   el('modal-layer').querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(button => button.addEventListener('click', () => { codexTab = button.dataset.tab as 'default' | 'custom'; showCodex(); }));
 }
 
 function showCustom() {
   const seed = customDraft ?? '호기심이 많은 | curious | She was curious about the old library.\n프랑스의 수도는? | 파리\n7 × 8 = ? | 56';
-  openModal(`${archiveHeader('', '나만의 기억 만들기', '')}<div class="archive-body"><div class="workshop-layout"><section class="rune-inscription"><label class="input-label" for="custom-words">문제·뜻 | 답·단어 | 설명<span>설명은 선택</span></label><textarea id="custom-words" rows="7" spellcheck="false" placeholder="호기심이 많은 | curious\n프랑스의 수도는? | 파리">${escape(seed)}</textarea><div class="inscription-meta"><span>한 줄에 하나 · 3~30개</span><strong id="inscription-count"></strong></div><p id="custom-error" class="form-error" role="alert"></p><div class="custom-note">${icon('book')}<span>앞은 적의 문제, 뒤는 무기의 답이에요.<br>설명은 도감과 <kbd>Tab</kbd> 힌트에서 볼 수 있어요.</span></div></section><aside class="workshop-preview" aria-label="전투 미리보기"><h3>전투 미리보기</h3><div id="custom-preview"></div></aside></div><div class="workshop-actions"><button id="create-dungeon" class="primary-button" ${ready ? '' : 'disabled'}>${icon('play')} 저장하고 던전 입장 ${icon('arrow')}</button><button id="create-boss" class="boss-start-button" ${ready ? '' : 'disabled'}>${icon('skull')} 저장하고 보스전 도전</button></div></div>`, 'workshop');
+  openModal(`${archiveHeader('', '나만의 기억 만들기', '')}<div class="archive-body"><div class="workshop-layout"><section class="rune-inscription"><label class="input-label" for="custom-words">문제·뜻 | 답·단어 | 설명<span>설명은 선택</span></label><textarea id="custom-words" rows="7" spellcheck="false" placeholder="호기심이 많은 | curious\n프랑스의 수도는? | 파리">${escape(seed)}</textarea><div class="inscription-meta"><span>한 줄에 하나 · 3~30개</span><strong id="inscription-count"></strong></div><p id="custom-error" class="form-error" role="alert"></p><div class="custom-note">${icon('book')}<span>앞은 적의 문제, 뒤는 무기의 답이에요.<br>설명은 도감과 <kbd>Tab</kbd> 힌트에서 볼 수 있어요.</span></div></section><aside class="workshop-preview" aria-label="전투 미리보기"><h3>전투 미리보기</h3><div id="custom-preview"></div></aside></div><div class="workshop-actions"><button id="create-dungeon" class="primary-button" ${ready ? '' : 'disabled'}>${icon('play')} 던전 입장 ${icon('arrow')}</button><button id="create-boss" class="boss-start-button" ${ready ? '' : 'disabled'}>${icon('skull')} 보스전 도전</button></div></div>`, 'workshop');
   const input = el<HTMLTextAreaElement>('custom-words');
+  el('custom-words').closest('.workshop-layout')!.insertAdjacentHTML('beforebegin', `<div class="memory-library"><label>단어장 선택<select id="memory-deck" aria-label="단어장 선택"><option value="">새 단어장</option>${progress.decks.map(deck => `<option value="${escape(deck.id)}" ${deck.id === customDeckId ? 'selected' : ''}>${escape(deck.name)} · ${deck.words.length}개</option>`).join('')}</select></label><button id="new-memory" class="text-button">${icon('plus')} 새 단어장</button></div><label class="memory-name" for="memory-name">단어장 이름<input id="memory-name" type="text" maxlength="40" value="${escape(customName)}" autocomplete="off" /></label>`);
+  el('custom-error').insertAdjacentHTML('afterend', `<div class="memory-save-row"><button id="save-memory" class="boss-start-button">${icon('book')} ${customDeckId ? '변경 저장' : '새 단어장 저장'}</button><span id="memory-status" role="status">단어장마다 3~30개 · 여러 개 저장 가능</span></div>`);
+  const nameInput = el<HTMLInputElement>('memory-name');
+  const rememberDraft = () => {
+    customName = nameInput.value; customDraft = input.value;
+    memoryDrafts.set(customDeckId ?? '', { name: customName, text: customDraft });
+  };
+  const changeDeck = (id: string | null, blank = false) => {
+    rememberDraft();
+    if (id) {
+      const next = selectDeck(progress, id);
+      if (!next || !saveProgress(next)) { el<HTMLSelectElement>('memory-deck').value = customDeckId ?? ''; el('custom-error').textContent = '단어장 선택을 저장하지 못했어요.'; return; }
+      Object.assign(progress, next);
+    }
+    customDeckId = id;
+    const deck = progress.decks.find(item => item.id === id), draft = memoryDrafts.get(id ?? '');
+    customName = blank ? nextDeckName(progress) : draft?.name ?? deck?.name ?? nextDeckName(progress);
+    customDraft = blank ? '' : draft?.text ?? (deck ? serializeMemoryPairs(deck.words) : '');
+    showCustom();
+  };
+  el<HTMLSelectElement>('memory-deck').value = customDeckId ?? '';
+  el('memory-deck').addEventListener('change', () => changeDeck(el<HTMLSelectElement>('memory-deck').value || null));
+  el('new-memory').addEventListener('click', () => changeDeck(null, true));
+  nameInput.addEventListener('input', rememberDraft);
   function updatePreview() {
-    customDraft = input.value;
+    rememberDraft();
     const lines = input.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     el('inscription-count').textContent = `${lines.length} / 30`;
     const pairs = lines.slice(0, 3).map(line => line.split('|').map(part => part.trim()));
     el('custom-preview').innerHTML = `<div class="preview-creature">${icon('shield')}<small>적의 문제·뜻</small><strong>${escape(pairs[0]?.[0] || '문제·뜻')}</strong></div><span class="preview-arrow">${icon('arrow')} 맞는 답으로 공격</span><div class="preview-runes">${pairs.map((pair, index) => `<div class="preview-rune">${runeArt((['sword', 'bow', 'hammer'] as WeaponKind[])[index])}<strong>${escape(pair[1] || '?')}</strong><kbd>${index + 1}</kbd></div>`).join('')}</div>`;
   }
   updatePreview(); input.addEventListener('input', updatePreview);
+  function saveMemory() {
+    const result = prepareDeckSave(progress, customDeckId, nameInput.value, input.value);
+    if (result.error || !result.progress || !result.deck) { el('custom-error').textContent = result.error ?? '단어장을 확인하세요.'; return; }
+    if (!saveProgress(result.progress)) { el('custom-error').textContent = '저장 공간이 부족하거나 브라우저 저장을 사용할 수 없어요. 기존 단어장은 유지됩니다.'; return; }
+    Object.assign(progress, result.progress); customDeckId = result.deck.id; rememberDraft();
+    el('custom-error').textContent = ''; el('memory-status').textContent = `‘${result.deck.name}’ 저장됨 · ${result.deck.words.length}개`;
+    el('save-memory').innerHTML = `${icon('book')} 변경 저장`;
+    el('memory-deck').innerHTML = `<option value="">새 단어장</option>${progress.decks.map(deck => `<option value="${escape(deck.id)}" ${deck.id === customDeckId ? 'selected' : ''}>${escape(deck.name)} · ${deck.words.length}개</option>`).join('')}`;
+    return result.deck.words;
+  }
+  el('save-memory').addEventListener('click', saveMemory);
   function createCustom(mode: RunMode) {
-    const result = parseMemoryPairs(input.value, progress.custom);
+    const result = parseMemoryPairs(input.value, progress.decks.flatMap(deck => deck.words).concat(progress.custom));
     if (result.error) { el('custom-error').textContent = result.error; return; }
-    progress.custom = result.words; persist(); startRun(result.words, mode);
+    startRun(result.words, mode);
   }
   el('create-dungeon').addEventListener('click', () => createCustom('campaign'));
   el('create-boss').addEventListener('click', () => createCustom('boss'));
+  el('create-boss').insertAdjacentHTML('afterend', `<button id="create-typing" class="boss-start-button tempest" ${ready ? '' : 'disabled'}>${icon('bolt')} 백뢰의 회랑 입장</button>`);
+  el('create-typing').addEventListener('click', () => createCustom('typing'));
 }
 
 
 function showHelp() {
+  if (activeMode === 'typing' && overlay !== 'start') {
+    openModal(`${archiveHeader('', '백뢰의 회랑', '')}<div class="archive-body"><div class="help-steps"><div><span>01</span><section><h3>답을 타이핑해 번개 연결</h3><p>일치하는 적이 붉어지고, 70%부터 타올라요. 틀리면 연결이 끊어져요. 지우고 다시 입력하세요.</p></section></div><div><span>02</span><section><h3>빠르게 완성해 연쇄 폭발</h3><p>입력 속도에 따라 최대 3·2·1마리를 처치해요. 더 느리면 피해만 줍니다. 같은 답의 기록을 경신하면 주변까지 충격파!</p></section></div><div><span>03</span><section><h3>12라운드의 기억 수호</h3><p>7라운드부터 문제와 답이 뒤집혀요. 적이 왼쪽 수호선을 넘으면 생명력 −12. Tab은 힌트, 번개 메뉴는 속도 설정이에요.</p></section></div></div><button id="help-close" class="primary-button">확인 ${icon('check')}</button></div>`, 'codex');
+    el('help-close').addEventListener('click', () => closeModal()); return;
+  }
   openModal(`${archiveHeader('', '전투 안내', '')}<div class="archive-body"><div class="help-steps"><div><span>01</span><section><h3>적의 문제에 맞는 답을 선택</h3><p>예: ‘내키지 않는’에는 <b>reluctant</b>. 1·2·3으로 무기를 바꾸세요. 오답은 생명력 −8.</p></section></div><div><span>02</span><section><h3>던전 탐험</h3><p>바닥 클릭으로 이동, 적 클릭 또는 Space로 공격. Shift로 회피하고, 방어막을 깬 적을 처치해 경험치를 모으세요.</p></section></div><div><span>03</span><section><h3>보스 디펜스</h3><p>이동 중에는 사격을 멈추고, 서 있으면 바라보는 방향으로 자동 발사해요. 왼쪽 골인선을 지키세요. 돌파당하면 생명력 −12.</p></section></div><div><span>04</span><section><h3>강화와 힌트</h3><p>주황색 미니 보스 3마리를 처치할 때마다 강화 선택! 선택할 때까지 전투가 멈춰요. Tab은 현재 무기의 문제와 설명을 보여줍니다.</p></section></div></div><button id="help-close" class="primary-button">확인 ${icon('check')}</button></div>`, 'codex');
   el('help-close').addEventListener('click', () => closeModal());
 }
@@ -361,9 +545,10 @@ function handleGameEvent(event: GameEvent) {
   if (event.type === 'ready') {
     ready = true; scene?.scale.on('resize', positionUpgradePicker);
     if (overlay === 'start') showStart();
-    el('modal-layer').querySelectorAll<HTMLButtonElement>('#create-dungeon, #create-boss').forEach(button => { button.disabled = false; });
+    el('modal-layer').querySelectorAll<HTMLButtonElement>('#create-dungeon, #create-boss, #create-typing').forEach(button => { button.disabled = false; });
   }
   if (event.type === 'state') updateState(event.state);
+  if (event.type === 'typing') renderTypingView(event.view, event.clearInput);
   if (event.type === 'attempt') {
     if (event.result === 'correct') runCorrect++; else runWrong++;
     recordAttempt(progress, event.word.id, event.result); persist();
@@ -376,15 +561,19 @@ function handleGameEvent(event: GameEvent) {
 }
 
 showStart();
-const mounted = mountGame('game-canvas', handleGameEvent); scene = mounted.scene;
+const typingScene = new TypingScene(handleGameEvent);
+const mounted = mountGame('game-canvas', handleGameEvent, [typingScene]);
+const dungeonScene = mounted.scene; scene = dungeonScene;
 new ResizeObserver(() => requestAnimationFrame(positionUpgradePicker)).observe(document.querySelector('.game-stage')!);
 scene.audio.muted = progress.muted;
 function updateSound() { el('sound-button').innerHTML = icon(progress.muted ? 'muted' : 'sound'); el('sound-button').setAttribute('aria-label', progress.muted ? '소리 켜기' : '소리 끄기'); }
 updateSound();
-el('sound-button').addEventListener('click', () => { progress.muted = !progress.muted; scene!.audio.muted = progress.muted; if (!progress.muted) scene!.audio.unlock(); persist(); updateSound(); });
+el('sound-button').addEventListener('click', () => { progress.muted = !progress.muted; scene!.audio.muted = progress.muted; if (!progress.muted) scene!.audio.unlock(); persist(); updateSound(); if (activeMode === 'typing' && overlay === 'none' && !modalOpen) focusBattle(); });
 el('codex-button').addEventListener('click', showCodex);
 el('custom-button').addEventListener('click', showCustom);
 el('help-button').addEventListener('click', showHelp);
+el('help-button').insertAdjacentHTML('beforebegin', `<button id="typing-settings-button" class="icon-button" aria-label="타이핑 전투 설정" title="타이핑 전투 설정">${icon('bolt')}</button>`);
+el('typing-settings-button').addEventListener('click', showTypingSettings);
 el('quick-hint').addEventListener('click', () => { if (overlay === 'hint') hideOverlay(); else showHint(); });
 el('fullscreen-button').addEventListener('click', async () => {
   try {
@@ -393,11 +582,14 @@ el('fullscreen-button').addEventListener('click', async () => {
   } catch { toast('이 브라우저에서는 전체 화면을 사용할 수 없어요.'); }
 });
 el('pause-button').addEventListener('click', () => { if (overlay === 'pause') hideOverlay(); else showPause(); });
+el('pause-button').insertAdjacentHTML('beforebegin', `<button id="home-button" class="icon-button" aria-label="초기 화면으로" title="초기 화면으로">${icon('home')}</button>`);
+el('home-button').addEventListener('click', returnToTitle);
+document.querySelector<HTMLAnchorElement>('.arena-menu .brand')!.addEventListener('click', event => { event.preventDefault(); returnToTitle(); });
 el('hint-button').addEventListener('click', () => { if (overlay === 'hint') hideOverlay(); else showHint(); });
-el('modal-layer').addEventListener('click', event => { if (event.target === el('modal-layer')) closeModal(); });
 document.addEventListener('keydown', event => {
+  if (event.isComposing) return;
   if (modalOpen && event.key === 'Tab') {
-    const targets = Array.from(el('modal-layer').querySelectorAll<HTMLElement>('button:not([disabled]),textarea,input,summary,[tabindex="0"]'));
+    const targets = Array.from(el('modal-layer').querySelectorAll<HTMLElement>('button:not([disabled]),textarea,input,select,summary,[tabindex="0"]'));
     const first = targets[0], last = targets[targets.length - 1];
     if (event.shiftKey && (document.activeElement === first || document.activeElement?.classList.contains('modal'))) { event.preventDefault(); last?.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -433,4 +625,4 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) showP
 window.addEventListener('blur', showPause);
 
 // Development-only state inspection, used by browser integration tests.
-if (import.meta.env.DEV) Object.assign(window, { __wordmaster: { scene, get state() { return state; }, get overlay() { return overlay; } } });
+if (import.meta.env.DEV) Object.assign(window, { __wordmaster: { get scene() { return scene; }, typingScene, dungeonScene, get state() { return state; }, get overlay() { return overlay; } } });
