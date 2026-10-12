@@ -2,7 +2,7 @@ import './style.css';
 import { COLORS, DEFAULT_WORDS, KIND_NAMES, parseMemoryPairs, serializeMemoryPairs, type WeaponKind, type Word } from './data';
 import { loadProgress, mastery, recordAttempt, saveProgress } from './progress';
 import { mountGame, type DungeonScene, type GameEvent, type RunMode, type Snapshot } from './game';
-import type { UpgradeId, UpgradeOption, BossUpgradeId, BossUpgradeOption } from './upgrades';
+import { BOSS_UPGRADE_INTERVAL, experienceNeeded, type UpgradeId, type UpgradeOption, type BossUpgradeId, type BossUpgradeOption } from './upgrades';
 
 const paths: Record<string, string> = {
   sword: '<path d="m16 3 5 0 0 5-11 11-5-5L16 3Z"/><path d="m4 13 7 7M3 21l4-4"/>',
@@ -62,7 +62,7 @@ el('app').innerHTML = `
       <div class="arena-status"><span id="timer">00:00</span><span id="enemy-count">남은 적 9</span><span id="wave-status">첫 적을 기다리는 중</span><span id="combo">×0 COMBO</span></div>
       <div id="boss-bar" class="boss-bar" hidden><span id="boss-round">라운드 1 / 12</span><div><i id="boss-fill"></i></div><small id="boss-count"></small></div>
       <div class="bottom-hud">
-        <div class="hud-growth"><strong id="level-text">LV. 1</strong><div class="xp-track"><i id="xp-fill"></i></div><small id="xp-text">0 / 24 XP</small><span id="burst-status">정답 0 / 3</span></div>
+        <div class="hud-growth"><strong id="level-text">LV. 1</strong><div class="xp-track"><i id="xp-fill"></i></div><small id="xp-text">0 / ${experienceNeeded(1)} XP</small><span id="burst-status">정답 0 / 3</span></div>
         <div class="hud-main">
           <div class="hud-vitals"><div class="health-line">${icon('heart')}<span>생명력</span><strong id="health-text">100 / 100</strong></div><div class="health-track"><div id="health-fill"></div></div><div class="hud-dash"><kbd>SHIFT</kbd><span>회피</span><span class="dash-track"><i id="dash-fill"></i></span><button id="quick-hint" class="icon-button" aria-label="단어 뜻 보기" title="뜻 보기 (Tab)">${icon('book')}</button></div></div>
           <div id="armory" class="armory"></div>
@@ -93,10 +93,10 @@ function updateState(next: Snapshot) {
   el('health-fill').style.width = `${next.hp / next.maxHp * 100}%`;
   el('health-fill').classList.toggle('low', next.hp <= 30);
   el('enemy-count').textContent = `남은 적 ${next.remaining} · 필드 ${next.alive}`;
-  el('wave-status').textContent = next.boss ? `${next.bossColumns}열 지원군 · ${next.bossRoundKills >= next.bossKillGoal ? next.miniBosses ? '미니 보스 먼저 격파' : '봉인 노출! 보스 관통 사격' : `격파 ${next.bossRoundKills} / ${next.bossKillGoal}`} · 계속 소환` : !next.remaining ? '첫 던전을 시작하세요' : next.nextSide !== null ? `${['위', '오른쪽', '아래', '왼쪽'][next.nextSide]}에서 등장 준비` : next.incoming ? `${next.spawnEvery.toFixed(1)}초 간격 · 대기 ${next.incoming}` : '마지막 적을 마무리하세요';
+  el('wave-status').textContent = next.boss ? `${next.bossColumns}열 지원군 · ${next.bossRoundKills >= next.bossKillGoal ? next.miniBosses ? '미니 보스 먼저 격파' : '봉인 노출! 보스를 클릭해 다음 라운드' : `격파 ${next.bossRoundKills} / ${next.bossKillGoal}`} · 계속 소환` : !next.remaining ? '첫 던전을 시작하세요' : next.nextSide !== null ? `${['위', '오른쪽', '아래', '왼쪽'][next.nextSide]}에서 등장 준비` : next.incoming ? `${next.spawnEvery.toFixed(1)}초 간격 · 대기 ${next.incoming}` : '마지막 적을 마무리하세요';
   el('level-text').textContent = next.boss ? `ROUND ${Math.min(next.bossSeals + 1, next.totalSeals)}` : `LV. ${next.level}`;
-  el('xp-fill').style.width = `${next.boss ? next.bossSeals % 3 / 3 * 100 : next.xp / next.xpNeeded * 100}%`;
-  el('xp-text').textContent = next.boss ? `${next.bossSeals % 3} / 3 라운드 · 다음 강화 선택` : `${next.xp} / ${next.xpNeeded} XP`;
+  el('xp-fill').style.width = `${next.boss ? next.bossSeals % BOSS_UPGRADE_INTERVAL / BOSS_UPGRADE_INTERVAL * 100 : next.xp / next.xpNeeded * 100}%`;
+  el('xp-text').textContent = next.boss ? `${next.bossSeals % BOSS_UPGRADE_INTERVAL} / ${BOSS_UPGRADE_INTERVAL} 라운드 · 다음 강화 선택` : `${next.xp} / ${next.xpNeeded} XP`;
   el('burst-status').textContent = next.boss ? next.bossAutoFire ? `동시 발사 ${next.bossArrows}발` : '이동 중 · 사격 중지' : next.burst > 0 ? `기억 폭주 ${next.burst.toFixed(1)}s` : `정답 ${next.charge} / 3`;
   el('burst-status').classList.toggle('active', next.burst > 0);
   document.querySelector('.bottom-hud')!.classList.toggle('overdrive', next.burst > 0);
@@ -353,7 +353,7 @@ function showCustom() {
 
 
 function showHelp() {
-  openModal(`${archiveHeader('', '전투 안내', '')}<div class="archive-body"><div class="help-steps"><div><span>01</span><section><h3>적의 문제에 맞는 답을 선택</h3><p>예: ‘내키지 않는’에는 <b>reluctant</b>. 1·2·3으로 무기를 바꾸세요. 오답은 생명력 −8.</p></section></div><div><span>02</span><section><h3>던전 탐험</h3><p>바닥 클릭으로 이동, 적 클릭 또는 Space로 공격. Shift로 회피하고, 방어막을 깬 적을 처치해 경험치를 모으세요.</p></section></div><div><span>03</span><section><h3>보스 디펜스</h3><p>이동 중에는 사격을 멈추고, 서 있으면 바라보는 방향으로 자동 발사해요. 왼쪽 골인선을 지키세요. 돌파당하면 생명력 −12.</p></section></div><div><span>04</span><section><h3>강화와 힌트</h3><p>주황색 미니 보스를 처치하면 강화 선택! 선택할 때까지 전투가 멈춰요. Tab은 현재 무기의 문제와 설명을 보여줍니다.</p></section></div></div><button id="help-close" class="primary-button">확인 ${icon('check')}</button></div>`, 'codex');
+  openModal(`${archiveHeader('', '전투 안내', '')}<div class="archive-body"><div class="help-steps"><div><span>01</span><section><h3>적의 문제에 맞는 답을 선택</h3><p>예: ‘내키지 않는’에는 <b>reluctant</b>. 1·2·3으로 무기를 바꾸세요. 오답은 생명력 −8.</p></section></div><div><span>02</span><section><h3>던전 탐험</h3><p>바닥 클릭으로 이동, 적 클릭 또는 Space로 공격. Shift로 회피하고, 방어막을 깬 적을 처치해 경험치를 모으세요.</p></section></div><div><span>03</span><section><h3>보스 디펜스</h3><p>이동 중에는 사격을 멈추고, 서 있으면 바라보는 방향으로 자동 발사해요. 왼쪽 골인선을 지키세요. 돌파당하면 생명력 −12.</p></section></div><div><span>04</span><section><h3>강화와 힌트</h3><p>주황색 미니 보스 3마리를 처치할 때마다 강화 선택! 선택할 때까지 전투가 멈춰요. Tab은 현재 무기의 문제와 설명을 보여줍니다.</p></section></div></div><button id="help-close" class="primary-button">확인 ${icon('check')}</button></div>`, 'codex');
   el('help-close').addEventListener('click', () => closeModal());
 }
 

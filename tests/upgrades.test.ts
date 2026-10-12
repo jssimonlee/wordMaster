@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrowCount, emptyWeaponLevels, experienceNeeded, spawnInterval, upgradeOptions } from '../src/upgrades';
+import { arrowCount, emptyWeaponLevels, experienceNeeded, spawnInterval, upgradeOptions, ROOM_REWARD_INTERVAL, BOSS_UPGRADE_INTERVAL, MINI_BOSS_REWARD_INTERVAL } from '../src/upgrades';
 
 describe('arena progression', () => {
   it('accelerates spawning while retaining a lower bound', () => {
@@ -8,8 +8,22 @@ describe('arena progression', () => {
     expect(spawnInterval(60000, 3)).toBe(1500);
   });
   it('increases XP thresholds and evolves arrows from one to three to five', () => {
-    expect([1, 2, 3].map(experienceNeeded)).toEqual([24, 36, 48]);
+    expect([1, 2, 3].map(experienceNeeded)).toEqual([72, 108, 144]);
     expect([0, 1, 2].map(arrowCount)).toEqual([1, 3, 5]);
+  });
+  it('cuts upgrade interruptions by more than half across a default run', () => {
+    const levelRewards = (totalXp: number, threshold: (level: number) => number) => {
+      let level = 1;
+      while (totalXp >= threshold(level)) { totalXp -= threshold(level); level++; }
+      return level - 1;
+    };
+    const oldCampaign = levelRewards(36 * 12, level => 24 + (level - 1) * 12) + 4;
+    const campaign = levelRewards(36 * 12, experienceNeeded) + Math.floor(4 / ROOM_REWARD_INTERVAL);
+    expect(campaign).toBeLessThan(oldCampaign / 2);
+    // The last boss round ends the run, so it cannot offer a round upgrade.
+    const oldBoss = Math.floor(11 / 3) + 12;
+    const boss = Math.floor(11 / BOSS_UPGRADE_INTERVAL) + Math.floor(12 / MINI_BOSS_REWARD_INTERVAL);
+    expect(boss).toBeLessThan(oldBoss / 2);
   });
   it('offers available weapons and replaces capped upgrades with universal rewards', () => {
     expect(upgradeOptions(emptyWeaponLevels(), ['sword', 'bow', 'hammer']).map(item => item.id)).toEqual(['sword', 'bow', 'hammer']);

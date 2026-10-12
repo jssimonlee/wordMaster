@@ -142,14 +142,14 @@ test('normal evolution and room rewards use image buttons, including healing aft
   await page.keyboard.press('3');
   expect(await page.evaluate(() => { const scene = (window as any).__wordmaster.scene; return [scene.hp, scene.maxHp]; })).toEqual([65, 110]);
   await page.evaluate(() => {
-    const scene = (window as any).__wordmaster.scene; scene.clearEntities();
+    const scene = (window as any).__wordmaster.scene; scene.room = 2; scene.clearEntities();
     scene.kill(scene.spawnEnemy(scene.equipped[0], 'chaser', scene.player.x, scene.player.y));
   });
   await expect(page.locator('[data-reward]')).toHaveCount(3);
   await expect(page.locator('#game-overlay')).toBeHidden();
   await page.locator('[data-reward="power"]').click();
   await expect(page.locator('#upgrade-picker')).toBeHidden();
-  expect(await page.evaluate(() => { const scene = (window as any).__wordmaster.scene; return [scene.room, scene.hp, scene.attackBoost, scene.paused]; })).toEqual([1, 75, 8, false]);
+  expect(await page.evaluate(() => { const scene = (window as any).__wordmaster.scene; return [scene.room, scene.hp, scene.attackBoost, scene.paused]; })).toEqual([3, 75, 8, false]);
 });
 
 test('upgrade waits through early clicks, floor and description clicks, and attack Space until a deliberate choice', async ({ page }) => {
@@ -319,7 +319,7 @@ test('orange mini bosses use a different selectable word, reserve space, and rew
   await page.goto('/'); await page.getByRole('button', { name: '보스전 바로 도전', exact: false }).click();
   const encounter = await page.evaluate(() => {
     const scene = (window as any).__wordmaster.scene, boss = scene.enemies[0];
-    scene.nextAttack = scene.clock + 100000;
+    scene.nextAttack = scene.clock + 100000; scene.miniBossKills = 2;
     scene.launchBossMinion(boss); scene.launchBossMinion(boss); scene.launchBossMinion(boss);
     const waiting = scene.bossLaunched === 2;
     const field = scene.defenseField();
@@ -362,7 +362,7 @@ test('guided volleys concentrate on the chosen mini boss without shooting a diff
   const target = await page.evaluate(() => {
     const scene = (window as any).__wordmaster.scene, boss = scene.enemies[0], field = scene.defenseField();
     boss.attackAt = scene.clock + 100000;
-    scene.bossArrows = 3; scene.bossGuided = 1;
+    scene.bossArrows = 3; scene.bossGuided = 1; scene.miniBossKills = 2;
     const alternative = scene.equipped.find((word: any) => word.id !== boss.word.id);
     const mini = scene.spawnEnemy(alternative, 'charger', 600, field.midY);
     mini.miniBoss = true; mini.hp = mini.maxHp = 96; mini.sprite.setTexture('characters', 'miniboss').setDisplaySize(55, 64);
@@ -399,7 +399,6 @@ test('single-word final rounds provide a temporary weapon for their mini boss an
 
 test('boss upgrades offer speed, guided missiles, and volley choices without advancing while paused', async ({ page }) => {
   await page.goto('/'); await page.getByRole('button', { name: '보스전 바로 도전', exact: false }).click();
-  const choices = ['speed', 'guided', 'volley'];
   for (let round = 0; round < 9; round++) {
     await page.evaluate(() => {
       const scene = (window as any).__wordmaster.scene, boss = scene.enemies[0];
@@ -407,13 +406,13 @@ test('boss upgrades offer speed, guided missiles, and volley choices without adv
       scene.bossRoundKills = scene.bossKillGoal();
       scene.strike(boss, { ...boss.word, kind: 'bow' });
     });
-    if ((round + 1) % 3 === 0) {
+    if ((round + 1) % 9 === 0) {
       await expect(page.getByText('방어 무기를 업그레이드!', { exact: true })).toBeVisible();
       await expect(page.locator('[data-boss-upgrade]')).toHaveCount(3);
       const elapsed = await page.evaluate(() => (window as any).__wordmaster.scene.clock);
       await page.waitForTimeout(200);
       expect(await page.evaluate(() => (window as any).__wordmaster.scene.clock)).toBe(elapsed);
-      await page.locator(`[data-boss-upgrade="${choices[(round + 1) / 3 - 1]}"]`).click();
+      await page.locator('[data-boss-upgrade="speed"]').click();
       await expect(page.locator('#game-overlay')).toBeHidden();
       const upgrades = await page.evaluate(() => {
         const scene = (window as any).__wordmaster.scene;
@@ -422,8 +421,8 @@ test('boss upgrades offer speed, guided missiles, and volley choices without adv
         return { interval: scene.snapshot().bossFireInterval, guided: scene.bossGuided, arrows: scene.bossArrows, shots: scene.shots.length };
       });
       expect(upgrades.interval).toBeCloseTo(700 / 1.3);
-      expect(upgrades.guided).toBe(round >= 5 ? 1 : 0);
-      expect(upgrades.arrows).toBe(round >= 8 ? 2 : 1);
+      expect(upgrades.guided).toBe(0);
+      expect(upgrades.arrows).toBe(1);
       expect(upgrades.shots).toBe(upgrades.arrows);
     } else await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.scene.bossTransition)).toBe(false);
     await expect(page.locator('#boss-round')).toHaveText(`라운드 ${round + 2} / 12`);
@@ -869,8 +868,11 @@ test('incorrect strikes rebound; every chamber and boss seal can be cleared', as
     await expect(page.locator('.game-stage')).toHaveAttribute('data-environment', ['meadow', 'library', 'forge', 'frost'][room]);
     if (room > 0) await fillCombatRoom(page);
     for (let enemy = 0; enemy < 9; enemy++) await attackEnemy(page);
-    await expect(page.locator('[data-reward]').first()).toBeVisible();
-    await page.locator('[data-reward]').first().click();
+    if ((room + 1) % 3 === 0) {
+      await expect(page.locator('[data-reward]').first()).toBeVisible();
+      await page.locator('[data-reward]').first().click();
+    }
+    await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.scene.room)).toBe(room + 1);
     await page.waitForTimeout(900);
   }
   await expect(page.locator('#room-tag')).toHaveText('BOSS');
@@ -891,12 +893,12 @@ test('a four-word dungeon supports the final single-weapon room and boss stage',
   await page.waitForTimeout(900);
   await fillCombatRoom(page);
   for (let enemy = 0; enemy < 9; enemy++) await attackEnemy(page);
-  await page.locator('[data-reward]').first().click();
+  await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.scene.room)).toBe(1);
   await expect(page.locator('.word-slot')).toHaveCount(1);
   await page.waitForTimeout(900);
   await fillCombatRoom(page);
   for (let enemy = 0; enemy < 3; enemy++) await attackEnemy(page);
-  await page.locator('[data-reward]').first().click();
+  await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.scene.room)).toBe(2);
   await page.waitForTimeout(900);
   for (let seal = 0; seal < 4; seal++) await attackBossRound(page);
   await expect(page.getByText('던전을 정복했습니다.', { exact: true })).toBeVisible();
@@ -1088,12 +1090,13 @@ test('kill shards level up, pause for a choice, and triple arrows spare unmatche
   await clickCombatFixture(page, 'bow');
   await page.evaluate(() => {
     const scene = (window as any).__wordmaster.scene;
+    scene.xp = 48; // Four previous kills; the next two reach the new 72 XP threshold.
     scene.enemies.forEach((enemy: any, i: number) => { enemy.shielded = false; enemy.ring.setVisible(false); enemy.hp = i < 2 ? 1 : 1000; enemy.sprite.setPosition(600 + i * 100, 400); });
   });
   for (let i = 0; i < 2; i++) {
     await clickWorld(page, 600 + i * 100, 400);
     await expect.poll(() => page.evaluate(index => (window as any).__wordmaster.scene.enemies[index].dead, i)).toBe(true);
-    if (!i) await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.state.xp)).toBe(12);
+    if (!i) await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.state.xp)).toBe(60);
   }
   await expect(page.getByText('무기가 진화합니다.', { exact: true })).toBeVisible();
   const elapsed = await page.evaluate(() => (window as any).__wordmaster.state.elapsed);
@@ -1228,4 +1231,135 @@ test('title menu fits desktop, portrait and short screens and legacy memories ke
   await page.locator('#codex-button').click(); await page.locator('[data-tab="custom"]').click();
   await expect(page.locator('.codex-progress>strong').first()).toHaveText('36 / 100');
   expect(errors).toEqual([]);
+});
+
+
+test('early kills and rooms continue without an upgrade and the third room offers a reward', async ({ page }) => {
+  await start(page);
+  await page.evaluate(() => {
+    const scene = (window as any).__wordmaster.scene;
+    scene.clearEntities(); scene.nextSpawnAt = scene.clock + 100000;
+    for (let i = 0; i < 3; i++) scene.spawnEnemy(scene.equipped[0], 'chaser', scene.player.x + i * 40, scene.player.y);
+    scene.enemies.forEach((enemy: any) => { enemy.staggerUntil = scene.clock + 100000; });
+    scene.kill(scene.enemies[0]); scene.kill(scene.enemies[1]);
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.state.xp)).toBe(24);
+  await expect(page.locator('#level-text')).toHaveText('LV. 1');
+  await expect(page.locator('#upgrade-picker')).toBeHidden();
+  await page.evaluate(() => { const scene = (window as any).__wordmaster.scene; scene.hp = 50; scene.kill(scene.enemies[2]); });
+  await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.scene.room)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__wordmaster.scene.hp)).toBe(60);
+  await expect(page.locator('#upgrade-picker')).toBeHidden();
+  for (let room = 1; room < 3; room++) {
+    await page.evaluate(() => {
+      const scene = (window as any).__wordmaster.scene; scene.clearEntities();
+      const enemy = scene.spawnEnemy(scene.equipped[0], 'chaser', 600, 400);
+      enemy.dead = true; // Complete the chamber without extra XP.
+    });
+    if (room === 1) {
+      await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.scene.room)).toBe(2);
+      await expect(page.locator('#upgrade-picker')).toBeHidden();
+    } else await expect(page.locator('[data-reward]')).toHaveCount(3);
+  }
+  await page.locator('[data-reward="bow"]').click();
+  expect(await page.evaluate(() => { const scene = (window as any).__wordmaster.scene; return [scene.room, scene.hp, scene.weaponLevels.bow]; })).toEqual([3, 80, 1]);
+});
+
+test('mini boss rewards wait for three kills and restart resets their progress', async ({ page }) => {
+  await page.goto('/'); await page.getByRole('button', { name: '보스전 바로 도전', exact: false }).click();
+  for (let count = 1; count <= 3; count++) {
+    await page.evaluate(() => {
+      const scene = (window as any).__wordmaster.scene, boss = scene.enemies[0];
+      boss.attackAt = scene.clock + 100000; scene.nextAttack = scene.clock + 100000;
+      const enemy = scene.spawnEnemy(scene.equipped[1], 'charger', 600, scene.defenseField().midY);
+      enemy.miniBoss = true; scene.kill(enemy);
+    });
+    if (count < 3) {
+      expect(await page.evaluate(() => (window as any).__wordmaster.scene.pendingBossRewards)).toBe(0);
+      await expect(page.locator('#upgrade-picker')).toBeHidden();
+    } else await expect(page.locator('[data-boss-upgrade]')).toHaveCount(3);
+  }
+  await page.locator('[data-boss-upgrade="volley"]').click();
+  expect(await page.evaluate(() => (window as any).__wordmaster.scene.bossArrows)).toBe(2);
+  await page.keyboard.press('Escape'); await page.getByRole('button', { name: '현재 단어로 처음부터 다시' }).click();
+  expect(await page.evaluate(() => (window as any).__wordmaster.scene.miniBossKills)).toBe(0);
+});
+
+test('sword, bow, hammer, shield breaks and player damage keep the camera still', async ({ page }) => {
+  await start(page);
+  const result = await page.evaluate(() => {
+    const scene = (window as any).__wordmaster.scene;
+    scene.clearEntities(); let shakes = 0;
+    scene.cameras.main.shake = () => { shakes++; };
+    const word = scene.equipped[0], enemy = scene.spawnEnemy(word, 'chaser', scene.player.x + 75, scene.player.y);
+    for (const kind of ['sword', 'bow', 'hammer']) {
+      for (const hit of ['hit', 'break', 'rebound']) scene.impact(enemy, { ...word, kind }, hit);
+    }
+    scene.invulnerableUntil = 0; scene.hurt(8);
+    return { shakes, hp: scene.hp, stagger: enemy.staggerUntil > scene.clock, knockback: enemy.knockbackX > 0, hitStop: scene.hitStopRemaining > 0 };
+  });
+  expect(result).toEqual({ shakes: 0, hp: 92, stagger: true, knockback: true, hitStop: true });
+});
+
+
+test('the bow faces its aim and all volley arrows start where the nocked arrow was in four directions', async ({ page }) => {
+  await start(page);
+  const directions = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+  for (const angle of directions) {
+    const result = await page.evaluate(direction => {
+      const scene = (window as any).__wordmaster.scene;
+      scene.clearEntities(); scene.player.setPosition(600, 400);
+      scene.attackTarget = scene.lockedTarget = null; scene.angle = direction;
+      scene.equip(scene.equipped.findIndex((word: any) => word.kind === 'bow'));
+      scene.weaponLevels.bow = 2; scene.attackStarted = -1000; scene.updateHeldWeapon();
+      const nocked = { x: scene.nockedArrow.x, y: scene.nockedArrow.y, visible: scene.nockedArrow.visible };
+      const bow = { rotation: scene.held.rotation, originX: scene.held.originX, originY: scene.held.originY, flip: scene.held.flipX };
+      scene.attack();
+      return { nocked, bow, hiddenAfterRelease: !scene.nockedArrow.visible,
+        shots: scene.shots.map((shot: any) => ({ x: shot.object.x, y: shot.object.y, rotation: shot.object.rotation, direction: Math.atan2(shot.vy, shot.vx), type: shot.object.type })) };
+    }, angle);
+    expect(result.nocked.visible).toBe(true); expect(result.hiddenAfterRelease).toBe(true);
+    expect(result.bow).toMatchObject({ originX: .75, originY: .5, flip: true });
+    expect(Math.cos(result.bow.rotation - angle)).toBeCloseTo(1);
+    expect(result.shots).toHaveLength(5);
+    for (const shot of result.shots) {
+      expect(shot.x).toBeCloseTo(result.nocked.x); expect(shot.y).toBeCloseTo(result.nocked.y);
+      expect(Math.cos(shot.rotation - shot.direction)).toBeCloseTo(1);
+      expect(shot.type).toBe('Graphics');
+    }
+    expect(Math.cos(result.shots[0].direction - angle)).toBeCloseTo(1);
+    if (angle === 0) {
+      const clip = await page.evaluate(() => {
+        const scene = (window as any).__wordmaster.scene, box = scene.game.canvas.getBoundingClientRect();
+        return { x: box.x + 540 / scene.arenaWidth * box.width, y: box.y + 320 / scene.arenaHeight * box.height,
+          width: 300 / scene.arenaWidth * box.width, height: 160 / scene.arenaHeight * box.height };
+      });
+      await page.screenshot({ path: '/private/tmp/wordmaster-bow-proof.png', clip });
+    }
+  }
+  await page.evaluate(() => {
+    const scene = (window as any).__wordmaster.scene;
+    scene.equip(scene.equipped.findIndex((word: any) => word.kind === 'sword'));
+  });
+  expect(await page.evaluate(() => { const scene = (window as any).__wordmaster.scene; return { flip: scene.held.flipX, originY: scene.held.originY, nocked: scene.nockedArrow.visible }; })).toEqual({ flip: false, originY: .85, nocked: false });
+});
+
+test('round four repeats its boss word until six kills and a matching boss hit advance it', async ({ page }) => {
+  await page.goto('/'); await page.getByRole('button', { name: '보스전 바로 도전', exact: false }).click();
+  const state = await page.evaluate(() => {
+    const scene = (window as any).__wordmaster.scene;
+    scene.dismissBossMinions(); scene.bossIndex = 3; scene.beginBossRound();
+    scene.nextMiniBossAt = Infinity; scene.nextAttack = scene.clock + 100000;
+    const boss = scene.enemies[0];
+    for (let i = 0; i < 6; i++) scene.launchBossMinion(boss);
+    const repeated = scene.enemies.filter((enemy: any) => !enemy.boss).every((enemy: any) => enemy.word.id === boss.word.id);
+    scene.enemies.filter((enemy: any) => !enemy.boss).forEach((enemy: any) => scene.kill(enemy));
+    const exposed = !scene.bossGuarded(), before = scene.bossIndex;
+    scene.launchBossMinion(boss);
+    const continuous = scene.enemies.at(-1).word.id === boss.word.id;
+    scene.strike(boss, { ...boss.word, kind: 'bow' });
+    return { repeated, exposed, continuous, before, after: scene.bossIndex, goal: scene.bossKillGoal() };
+  });
+  expect(state).toEqual({ repeated: true, exposed: true, continuous: true, before: 3, after: 4, goal: 6 });
+  await expect(page.locator('#boss-round')).toHaveText('라운드 5 / 12');
 });

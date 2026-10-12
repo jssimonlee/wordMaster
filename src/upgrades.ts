@@ -13,7 +13,10 @@ export function bossUpgradeOptions(speed: number, guided: number, arrows: number
   ];
 }
 export const emptyWeaponLevels = (): WeaponLevels => ({ sword: 0, bow: 0, hammer: 0 });
-export const experienceNeeded = (level: number) => 24 + (level - 1) * 12;
+export const ROOM_REWARD_INTERVAL = 3;
+export const BOSS_UPGRADE_INTERVAL = 9;
+export const MINI_BOSS_REWARD_INTERVAL = 3;
+export const experienceNeeded = (level: number) => 72 + (level - 1) * 36;
 export const spawnInterval = (elapsedMs: number, room: number) => Math.max(1500, 4000 - elapsedMs * .07 - room * 150);
 export const arrowCount = (level: number) => level >= 2 ? 5 : level >= 1 ? 3 : 1;
 

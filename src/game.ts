@@ -4,7 +4,7 @@ import { resolveStrike } from './progress';
 import { GameAudio } from './audio';
 import { renderingScale } from './rendering';
 import { ENVIRONMENTS, paintEnvironment, paintDefenseEnvironment, type Environment } from './environments';
-import { arrowCount, bossUpgradeOptions, emptyWeaponLevels, experienceNeeded, spawnInterval, upgradeOptions, type UpgradeId, type UpgradeOption, type BossUpgradeId, type BossUpgradeOption } from './upgrades';
+import { arrowCount, bossUpgradeOptions, emptyWeaponLevels, experienceNeeded, spawnInterval, upgradeOptions, ROOM_REWARD_INTERVAL, BOSS_UPGRADE_INTERVAL, MINI_BOSS_REWARD_INTERVAL, type UpgradeId, type UpgradeOption, type BossUpgradeId, type BossUpgradeOption } from './upgrades';
 
 export const WIDTH = 1040;
 export const HEIGHT = 620;
@@ -35,7 +35,7 @@ interface Enemy {
   lane?: number;
   miniBoss?: boolean;
 }
-interface Shot { object: Phaser.GameObjects.Arc; vx: number; vy: number; expires: number; word?: Word; trailAt?: number; secondary?: boolean; pierce?: number; struck?: Set<Enemy>; attackId?: number; guided?: number; target?: Enemy; targetWordId?: string; bossFinisher?: boolean; }
+interface Shot { object: Phaser.GameObjects.Arc | Phaser.GameObjects.Graphics; vx: number; vy: number; expires: number; word?: Word; trailAt?: number; secondary?: boolean; pierce?: number; struck?: Set<Enemy>; attackId?: number; guided?: number; target?: Enemy; targetWordId?: string; bossFinisher?: boolean; }
 interface Gem { object: Phaser.GameObjects.Rectangle; born: number; value: number; }
 interface SpawnOrder { word: Word; kind: EnemyKind; side: number; }
 export interface Snapshot {
@@ -67,6 +67,7 @@ export class DungeonScene extends Phaser.Scene {
   private playerMoving = false;
   private shadow!: Phaser.GameObjects.Ellipse;
   private held!: Phaser.GameObjects.Image;
+  private nockedArrow!: Phaser.GameObjects.Graphics;
   private aimLine!: Phaser.GameObjects.Graphics;
   private movementMarker!: Phaser.GameObjects.Graphics;
   private moveTarget: { x: number; y: number } | null = null;
@@ -99,6 +100,7 @@ export class DungeonScene extends Phaser.Scene {
   private pendingBossRewards = 0;
   private nextMiniBossAt = 2;
   private miniBossSerial = 0;
+  private miniBossKills = 0;
   private bossAutoFire = true;
   private attackSerial = 0;
   private penalizedAttacks = new Set<number>();
@@ -171,6 +173,7 @@ export class DungeonScene extends Phaser.Scene {
     this.playerHealthBar = this.add.graphics().setDepth(805).setVisible(false);
     this.playerHealthLabel = this.add.text(520, 437, '', { resolution: 3, fontFamily: FONT, fontSize: '12px', color: '#e0fff3', stroke: '#09151a', strokeThickness: 3 }).setOrigin(.5, 1).setDepth(806).setVisible(false);
     this.held = this.add.image(545, 472, 'weapons', 'sword').setDisplaySize(17, 34).setOrigin(.5, .85).setDepth(502);
+    this.nockedArrow = this.add.graphics().setVisible(false);
     this.aimLine = this.add.graphics().setDepth(499);
     this.movementMarker = this.add.graphics().setDepth(-1);
     this.keys = this.input.keyboard!.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,ONE,TWO,THREE') as Record<string, Phaser.Input.Keyboard.Key>;
@@ -311,7 +314,7 @@ export class DungeonScene extends Phaser.Scene {
     this.weaponLevels = emptyWeaponLevels(); this.swingCount = this.burstUntil = this.charge = 0;
     this.bossIndex = 0; this.bossArrows = 1; this.bossLaunched = this.bossRoundKills = 0;
     this.bossFireSpeed = 1; this.bossGuided = this.bossLeaks = 0;
-    this.pendingBossRewards = this.miniBossSerial = 0; this.nextMiniBossAt = 2; this.bossAutoFire = true;
+    this.pendingBossRewards = this.miniBossSerial = this.miniBossKills = 0; this.nextMiniBossAt = 2; this.bossAutoFire = true;
     this.bossTransition = this.bossUpgradeOpen = false; this.bossGuardToastAt = -1000;
     this.attackSerial = 0; this.penalizedAttacks.clear();
     this.running = true;
@@ -343,7 +346,7 @@ export class DungeonScene extends Phaser.Scene {
 
   equip(slot: number) {
     if (!this.equipped[slot]) return;
-    this.slot = slot; this.held.setTexture('weapons', this.equipped[slot].kind); this.sendState();
+    this.slot = slot; this.held.setTexture('weapons', this.equipped[slot].kind); this.updateHeldWeapon(); this.sendState();
   }
 
   private applyUpgrade(reward: UpgradeId) {
@@ -373,9 +376,11 @@ export class DungeonScene extends Phaser.Scene {
     this.setPaused(false); this.sendState();
   }
 
-  chooseReward(reward: UpgradeId) {
+  chooseReward(reward?: UpgradeId) {
     if (!this.roomComplete) return;
-    this.applyUpgrade(reward);
+    const rewardRoom = (this.room + 1) % ROOM_REWARD_INTERVAL === 0;
+    if (rewardRoom && (!reward || !this.getUpgradeOptions().some(option => option.id === reward))) return;
+    if (rewardRoom) this.applyUpgrade(reward!);
     // A small heal between rooms keeps a first run forgiving.
     this.hp = Math.min(this.maxHp, this.hp + 10);
     this.room++; this.setPaused(false); this.loadRoom();
@@ -409,7 +414,7 @@ export class DungeonScene extends Phaser.Scene {
       this.bossOrder = this.groups.flatMap(group => Phaser.Utils.Array.Shuffle([...group]));
       this.bossArrows = 1; this.bossUpgradeOpen = false;
       this.bossFireSpeed = 1; this.bossGuided = this.bossLeaks = 0;
-      this.pendingBossRewards = this.miniBossSerial = 0; this.bossAutoFire = true;
+      this.pendingBossRewards = this.miniBossSerial = this.miniBossKills = 0; this.bossAutoFire = true;
       const field = this.defenseField();
       this.player.setPosition(field.playerX, field.midY); this.angle = 0;
       this.spawnEnemy(this.bossOrder[0], 'charger', field.bossX, field.midY, true);
@@ -620,11 +625,7 @@ export class DungeonScene extends Phaser.Scene {
     const bob = length && this.clock >= this.dashUntil ? Math.sin(this.clock / 65) * 2 : 0;
     this.shadow.setPosition(this.player.x, this.player.y + 19).setDepth(this.player.y - 1);
     const kind = this.equipped[this.slot].kind;
-    const swingProgress = Phaser.Math.Clamp((this.clock - this.attackStarted) / (kind === 'hammer' ? 260 : 160), 0, 1);
-    const swing = swingProgress < 1 ? Math.sin(swingProgress * Math.PI) : 0;
-    const weaponAngle = this.angle + (kind === 'bow' ? 0 : swingProgress < 1 ? (swingProgress - .5) * 2.2 : 0);
-    this.held.setPosition(this.player.x + Math.cos(weaponAngle) * (23 + swing * (kind === 'bow' ? -7 : 22)), this.player.y + Math.sin(weaponAngle) * (15 + swing * 20) + bob)
-      .setRotation(weaponAngle + Math.PI / 2).setDisplaySize(this.held.frame.realWidth / this.held.frame.realHeight * 38 * (1 + swing * .2), 38 * (1 + swing * .2)).setDepth(this.player.y + 5);
+    this.updateHeldWeapon(bob);
     this.aimLine.clear().lineStyle(1, Phaser.Display.Color.HexStringToColor(COLORS[this.equipped[this.slot].kind]).color, .18);
     this.aimLine.lineBetween(this.player.x + Math.cos(this.angle) * 30, this.player.y + Math.sin(this.angle) * 30, this.player.x + Math.cos(this.angle) * 70, this.player.y + Math.sin(this.angle) * 70);
     if (target) {
@@ -647,23 +648,64 @@ export class DungeonScene extends Phaser.Scene {
     }
     if (this.running && !this.finished && !this.spawnQueue.length && !this.spawnWarning && !this.gems.length && this.enemies.length && this.enemies.every(enemy => enemy.dead)) {
       this.roomComplete = true; this.score += 150; this.audio.play('clear'); this.sendState();
-      this.emit({ type: 'clear', room: this.room });
+      if ((this.room + 1) % ROOM_REWARD_INTERVAL === 0) this.emit({ type: 'clear', room: this.room });
+      else {
+        this.banner('CHAMBER CLEAR', '체력 10 회복 · 다음 방으로 이동');
+        this.time.delayedCall(900, () => this.chooseReward());
+      }
     }
     if (this.clock - this.lastState > 100) { this.lastState = this.clock; this.sendState(); }
   }
 
   private meleeRange(kind: WeaponKind) { return (kind === 'hammer' ? 107 : 100) + this.weaponLevels[kind] * 20; }
 
+  private drawArrow(graphics: Phaser.GameObjects.Graphics, color: number) {
+    graphics.lineStyle(2, 0xfff4cf).lineBetween(-14, 0, 5, 0);
+    graphics.fillStyle(color).fillTriangle(12, 0, 4, -4, 4, 4);
+    graphics.fillTriangle(-10, 0, -17, -4, -15, 0).fillTriangle(-10, 0, -17, 4, -15, 0);
+    return graphics;
+  }
+
+  private bowReleasePoint() {
+    return { x: this.held.x - Math.cos(this.angle) * 4, y: this.held.y - Math.sin(this.angle) * 4 };
+  }
+
+  private updateHeldWeapon(bob = 0) {
+    const kind = this.equipped[this.slot].kind;
+    const progress = Phaser.Math.Clamp((this.clock - this.attackStarted) / (kind === 'hammer' ? 260 : 160), 0, 1);
+    const swing = progress < 1 ? Math.sin(progress * Math.PI) : 0;
+    this.held.setDepth(this.player.y + 5);
+    this.nockedArrow.clear().setVisible(kind === 'bow' && this.clock - this.attackStarted >= 110);
+    if (kind === 'bow') {
+      // The atlas bow faces left with a vertical string; flip it to aim along +X.
+      const reach = 22 - swing * 2;
+      this.held.setOrigin(.75, .5).setFlipX(true).setRotation(this.angle)
+        .setDisplaySize(this.held.frame.realWidth / this.held.frame.realHeight * 52, 52)
+        .setPosition(this.player.x + Math.cos(this.angle) * reach, this.player.y + Math.sin(this.angle) * reach);
+      const release = this.bowReleasePoint();
+      this.drawArrow(this.nockedArrow, Phaser.Display.Color.HexStringToColor(COLORS.bow).color)
+        .setPosition(release.x, release.y).setRotation(this.angle).setDepth(this.player.y + 6);
+    } else {
+      const weaponAngle = this.angle + (progress < 1 ? (progress - .5) * 2.2 : 0);
+      this.held.setOrigin(.5, .85).setFlipX(false).setRotation(weaponAngle + Math.PI / 2)
+        .setDisplaySize(this.held.frame.realWidth / this.held.frame.realHeight * 38 * (1 + swing * .2), 38 * (1 + swing * .2))
+        .setPosition(this.player.x + Math.cos(weaponAngle) * (23 + swing * 22), this.player.y + Math.sin(weaponAngle) * (15 + swing * 20) + bob);
+    }
+  }
+
   private fireProjectile(word: Word, angle: number, secondary = false, pierce = 0, attackId = this.attackSerial, target?: Enemy, barrelOffset = 0) {
     const color = Phaser.Display.Color.HexStringToColor(COLORS[word.kind]).color;
     const wave = word.kind === 'sword';
-    const object = this.add.circle(this.player.x + Math.cos(angle) * 12 - Math.sin(angle) * barrelOffset, this.player.y + Math.sin(angle) * 12 + Math.cos(angle) * barrelOffset, wave ? 11 : 4, color, wave ? .65 : 1)
-      .setStrokeStyle(wave ? 2 : 1.5, 0xffffff).setScale(wave ? .7 : 2.8, wave ? 2 : .8).setRotation(angle).setDepth(900);
     const speed = wave ? .7 : .85;
     const guided = this.isBossRoom() ? this.bossGuided : 0;
     const bossFinisher = Boolean(target?.boss && !this.bossGuarded());
-    if (bossFinisher) { pierce = 24; object.setFillStyle(0xffd58a).setStrokeStyle(2, 0xfff1b5); }
-    if (guided) object.setFillStyle(0xb9f3dd).setStrokeStyle(1.5, 0xfff1b5);
+    const release = wave ? { x: this.player.x + Math.cos(angle) * 12, y: this.player.y + Math.sin(angle) * 12 } : this.bowReleasePoint();
+    const shotColor = guided ? 0xb9f3dd : bossFinisher ? 0xffd58a : color;
+    const object = wave
+      ? this.add.circle(0, 0, 11, shotColor, .65).setStrokeStyle(2, 0xffffff).setScale(.7, 2)
+      : this.drawArrow(this.add.graphics(), shotColor);
+    object.setPosition(release.x - Math.sin(angle) * barrelOffset, release.y + Math.cos(angle) * barrelOffset).setRotation(angle).setDepth(900);
+    if (bossFinisher) pierce = 24;
     this.shots.push({ object, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, expires: this.clock + (guided ? 4000 : 2200), word, trailAt: 0, secondary, pierce, struck: new Set(), attackId, guided, target, targetWordId: target?.word.id, bossFinisher });
   }
 
@@ -685,6 +727,7 @@ export class DungeonScene extends Phaser.Scene {
     const rank = this.weaponLevels[word.kind], frenzy = this.clock < this.burstUntil;
     this.nextAttack = this.clock + (this.isBossRoom() ? 700 / this.bossFireSpeed : ({ sword: 360, bow: 490, hammer: 660 }[word.kind]) / (this.haste * (frenzy ? 1.65 : 1)));
     this.attackStarted = this.clock;
+    this.updateHeldWeapon();
     this.audio.play(word.kind === 'bow' ? 'shoot' : 'swing');
     if (word.kind === 'bow') {
       if (this.isBossRoom()) {
@@ -797,7 +840,7 @@ export class DungeonScene extends Phaser.Scene {
           if (enemy.dead || this.finished) return;
           // Clear arrows from the previous word before the next round starts.
           for (const shot of this.shots) shot.object.destroy(); this.shots = [];
-          if (this.bossIndex % 3 === 0) {
+          if (this.bossIndex % BOSS_UPGRADE_INTERVAL === 0) {
             this.bossUpgradeOpen = true; this.bossUpgradeSource = 'round'; this.setPaused(true);
             this.emit({ type: 'bossUpgrade', source: 'round', options: bossUpgradeOptions(this.bossFireSpeed, this.bossGuided, this.bossArrows), round: this.bossIndex });
           } else this.beginBossRound();
@@ -823,7 +866,6 @@ export class DungeonScene extends Phaser.Scene {
     const x = enemy.sprite.x, y = enemy.sprite.y;
     const size = result === 'break' ? 48 : heavy ? 42 : 26;
     this.hitStopRemaining = Math.max(this.hitStopRemaining, result === 'break' ? 85 : result === 'rebound' ? 35 : heavy ? 70 : 45);
-    this.cameras.main.shake(heavy || result === 'break' ? 150 : 85, heavy ? .006 : result === 'break' ? .0045 : .0025);
     const flash = this.add.graphics().setDepth(960);
     flash.lineStyle(heavy ? 5 : 3, 0xffffff, 1);
     for (let i = 0; i < 4; i++) {
@@ -855,7 +897,10 @@ export class DungeonScene extends Phaser.Scene {
     const wasGuarded = this.isBossRoom() && this.bossGuarded();
     enemy.dead = true; this.kills++; this.score += enemy.boss ? 800 : 35;
     if (enemy.miniBoss) {
-      this.score += 100; this.pendingBossRewards++; this.bossAutoFire = false;
+      this.score += 100; this.miniBossKills++;
+      if (this.miniBossKills % MINI_BOSS_REWARD_INTERVAL === 0) {
+        this.pendingBossRewards++; this.bossAutoFire = false;
+      }
     }
     if (!enemy.boss && this.isBossRoom()) {
       this.bossRoundKills++;
@@ -1034,7 +1079,7 @@ export class DungeonScene extends Phaser.Scene {
   private hurt(amount: number, wrongAnswer = false) {
     if ((!wrongAnswer && this.clock < this.invulnerableUntil) || this.finished) return;
     this.hp = Math.max(0, this.hp - amount); this.invulnerableUntil = this.clock + 850; this.combo = 0; this.charge = 0;
-    this.audio.play('hurt'); this.cameras.main.shake(100, .003); this.floatText(this.player.x, this.player.y - 30, `−${amount}`, '#ff8a99');
+    this.audio.play('hurt'); this.floatText(this.player.x, this.player.y - 30, `−${amount}`, '#ff8a99');
     if (this.hp === 0) this.finish(false);
     this.sendState();
   }
