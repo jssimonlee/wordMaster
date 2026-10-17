@@ -1,0 +1,29 @@
+{
+  "tool": "built-in image_gen",
+  "reference": "guardian-tower.png",
+  "assets": [
+    {
+      "file": "guardian-tower-1.png",
+      "stage": 1,
+      "transparent": true,
+      "prompt": "Use case: precise-object-edit. Asset type: one transparent PNG upgrade-stage building sprite for a high-resolution fantasy tower defense game.\nEdit the referenced ornate final-stage tower into an EARLIER EVOLUTION of the same tower. Match its painterly 3D RPG rendering, elevated orthographic camera, blue-gray stone, silver, ivory, navy and restrained gold palette.\nCRITICAL ALIGNMENT: keep the square canvas size, the bottom of the stepped foundation, center x, and the blank circular navy medallion at exactly the same canvas coordinates as in the reference (medallion center near x50%,y73%). Do NOT recenter or enlarge the shorter building to fill the square. The top part of the canvas must stay transparent where higher-stage spires were removed. No text, no letters, no UI, no watermark, no ground, no cast ground shadow. Genuine transparent background. One complete building only.\nSTAGE 1 — NOVICE WATCHTOWER. Dramatically simplify the building into a low, plain, sturdy round stone watchtower about HALF the reference's height, its top starting around y43% of the same canvas. Keep the same lower foundation and same blank medallion position. Basic gray-ivory blockwork, very modest silver rim, one small soft blue crystal above a simple crenellated roof. Remove every side turret, tall fin, floating ring, ornate gold tracery and large crown. Clear restrained silhouette, attractive hand-painted starter building, modest little blue window. This must feel like an ordinary beginner tower, clearly much simpler and shorter than the reference."
+    },
+    {
+      "file": "guardian-tower-2.png",
+      "stage": 2,
+      "transparent": true,
+      "prompt": "Use case: precise-object-edit. Asset type: one transparent PNG upgrade-stage building sprite for a high-resolution fantasy tower defense game.\nEdit the referenced ornate final-stage tower into an EARLIER EVOLUTION of the same tower. Match its painterly 3D RPG rendering, elevated orthographic camera, blue-gray stone, silver, ivory, navy and restrained gold palette.\nCRITICAL ALIGNMENT: keep the square canvas size, the bottom of the stepped foundation, center x, and the blank circular navy medallion at exactly the same canvas coordinates as in the reference (medallion center near x50%,y73%). Do NOT recenter or enlarge the shorter building to fill the square. The top part of the canvas must stay transparent where higher-stage spires were removed. No text, no letters, no UI, no watermark, no ground, no cast ground shadow. Genuine transparent background. One complete building only.\nSTAGE 2 — CRYSTAL SENTINEL. A medium-height upgraded tower, about 70 percent of the reference height, its top around y28% of the same canvas. Retain the aligned foundation and blank medallion. A sturdy ivory stone and navy cylinder, two short silver buttresses, a moderate blue crystal in a simple fork at the top, a few gold edges and luminous blue windows. NO small side satellite turrets, NO giant crown, NO large floating gold halo. More magical and refined than a plain starter tower but clearly simpler than the ornate final-stage reference."
+    },
+    {
+      "file": "guardian-tower-3.png",
+      "stage": 3,
+      "transparent": true,
+      "prompt": "Use case: precise-object-edit. Asset type: one transparent PNG upgrade-stage building sprite for a high-resolution fantasy tower defense game.\nEdit the referenced ornate final-stage tower into an EARLIER EVOLUTION of the same tower. Match its painterly 3D RPG rendering, elevated orthographic camera, blue-gray stone, silver, ivory, navy and restrained gold palette.\nCRITICAL ALIGNMENT: keep the square canvas size, the bottom of the stepped foundation, center x, and the blank circular navy medallion at exactly the same canvas coordinates as in the reference (medallion center near x50%,y73%). Do NOT recenter or enlarge the shorter building to fill the square. The top part of the canvas must stay transparent where higher-stage spires were removed. No text, no letters, no UI, no watermark, no ground, no cast ground shadow. Genuine transparent background. One complete building only.\nSTAGE 3 — STORM SPIRE. An advanced tall tower, about 85 percent of the reference height, its top around y13% of the same canvas. Retain the aligned foundation and blank medallion. Slender ivory and navy architecture with swept silver buttresses, elegant gold inlays, a large luminous blue central crystal held by TWO high silver prongs, two small low corner turrets. Some contained cyan energy flowing through windows. Strong attractive silhouette and richer ornament than the middle stage. Still clearly less elaborate than the reference: no trio of giant crystalline blades, no full floating golden halo, fewer miniature towers and less gold filigree."
+    }
+  ],
+  "finalStage": {
+    "file": "guardian-tower.png",
+    "stage": 4,
+    "prompts": "tower-generation.json"
+  }
+}

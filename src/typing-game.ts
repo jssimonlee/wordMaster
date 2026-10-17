@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { DungeonScene, type GameEvent, type RunMode, type Snapshot } from './game';
 import { DEFAULT_WORDS, type Word } from './data';
 import { animateWalking, newWalk, type WalkState, type WalkingKind } from './walking';
+import { RuneTowers, TOWER_SLOTS, towerAppearance, towerGlyph, towerInitial, towerSlotName, towerStats, type TowerUpgrade } from './towers';
 import {
   letterCount, loadTypingRecords, loadTypingSettings, normalizeTyping, reactionCapacity, recordTypingSpeed,
   TYPING_MAP_NAME, TYPING_ROUNDS, typingPair, typingSpawnInterval, typingTier, type TypingSettings, type TypingView,
@@ -11,7 +12,12 @@ interface StormMinion {
   shadow: Phaser.GameObjects.Ellipse; walk: WalkState; kind: WalkingKind;
   word: Word; sprite: Phaser.GameObjects.Sprite; label: Phaser.GameObjects.Text;
   aura: Phaser.GameObjects.Arc; health: Phaser.GameObjects.Graphics;
+  rune: Phaser.GameObjects.Text;
   lane: number; hp: number; color: number; burn: number; dead: boolean; heat: number;
+}
+interface TowerMissile {
+  image: Phaser.GameObjects.Image; target: StormMinion; initial: string; damage: number;
+  expires: number; trailAt: number; slot: number; range: number; vx: number; vy: number;
 }
 const FONT = '"Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
 const PALETTE = [0x89d5ed, 0xcba9ef, 0xe9c179, 0x8ac6aa, 0xe5a1b8, 0x9cb2ef];
@@ -71,6 +77,14 @@ export class TypingScene extends DungeonScene {
   private moveTo: { x: number; y: number } | null = null;
   private connected: StormMinion[] = [];
   private pendingComposition: { value: string; completedAt: number } | null = null;
+  private fortifications = new RuneTowers();
+  private towerPads: Phaser.GameObjects.Container[] = [];
+  private towerReach!: Phaser.GameObjects.Graphics;
+  private towerEditing = false;
+  private towerRune: string | null = null;
+  private towerSelected: number | null = null;
+  private towerMoving = false;
+  private towerMissiles: TowerMissile[] = [];
 
   constructor(emit: (event: GameEvent) => void) { super(emit, 1, 'typing'); this.typingEmit = emit; }
   override preload() { /* Assets are shared with the already-loaded dungeon scene. */ }
@@ -84,6 +98,9 @@ export class TypingScene extends DungeonScene {
     this.stormScore = this.stormKills = this.stormCombo = this.stormLeaks = this.stormClock = 0;
     this.pausedTime = this.pauseBegan = 0; this.bootTime = performance.now();
     this.swarm = []; this.connected = []; this.moveTo = null;
+    this.fortifications = new RuneTowers(); this.towerPads = [];
+    this.towerMissiles = [];
+    this.towerEditing = this.towerMoving = false; this.towerRune = null; this.towerSelected = null;
     this.resultText = ''; this.resultRecord = false; this.resultUntil = 0; this.publishAt = 0;
     this.resetInput();
     this.scenery = this.add.container(0, 0).setDepth(-20);
@@ -96,14 +113,31 @@ export class TypingScene extends DungeonScene {
     this.guardian = this.add.sprite(0, 0, 'characters', 'boss').setDisplaySize(89, 100).setTint(0xc4d9ed);
     this.guardianLabel = this.add.text(0, 0, '백뢰의 파수꾼', { resolution: 3, fontFamily: FONT, fontSize: '14px', color: '#e8f4ff', stroke: '#101a2b', strokeThickness: 4 }).setOrigin(.5, 1).setDepth(800);
     this.guardianHealth = this.add.graphics().setDepth(800);
+    this.towerReach = this.add.graphics().setDepth(-1);
+    for (let slot = 0; slot < TOWER_SLOTS; slot++) {
+      this.towerPads.push(this.add.container(0, 0, [this.add.graphics(),
+        this.add.image(0, 0, 'guardian-evolution-1').setOrigin(.5, .73).setVisible(false),
+        this.add.text(0, -4, '', { resolution: 3, fontFamily: FONT, fontSize: '22px', fontStyle: 'bold', color: '#ecfbff', stroke: '#102538', strokeThickness: 3 }).setOrigin(.5).setName('tower-rune'),
+        this.add.text(0, 29, '', { resolution: 3, fontFamily: FONT, fontSize: '10px', color: '#c6e9f6', stroke: '#102538', strokeThickness: 3 }).setOrigin(.5)]).setDepth(600));
+    }
     this.resizeTyping();
     this.typingPlayer.setPosition(Math.max(120, Math.min(240, this.w * .21)), (this.top + this.bottom) / 2 + 24);
     this.scale.on('resize', this.resizeTyping, this);
     this.events.once('shutdown', () => { this.scale.off('resize', this.resizeTyping, this); this.typingLive = false; });
     this.input.keyboard!.clearCaptures();
     const onPointer = (pointer: Phaser.Input.Pointer) => {
-      if (!pointer.leftButtonDown() || !this.typingLive || this.typingPaused || this.typingFinished) return;
+      if (!pointer.leftButtonDown() || !this.typingLive || this.typingFinished || (this.typingPaused && !this.towerEditing)) return;
       const point = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      const slot = this.towerPads.findIndex(pad => Math.abs(point.x - pad.x) <= 29 && Math.abs(point.y - pad.y) <= 32);
+      if (slot >= 0) {
+        if (!this.towerEditing) this.editTowers();
+        this.selectTowerSlot(slot); return;
+      }
+      if (this.towerEditing) {
+        this.closeTowers();
+        document.getElementById('typing-input')?.focus({ preventScroll: true });
+        return;
+      }
       this.moveTo = { x: Phaser.Math.Clamp(point.x, 72, this.w - 65), y: Phaser.Math.Clamp(point.y, this.top + 35, this.bottom - 15) };
       document.getElementById('typing-input')?.focus({ preventScroll: true });
     };
@@ -141,8 +175,8 @@ export class TypingScene extends DungeonScene {
     this.top = Math.max(135 / zoom, ((status?.offsetTop ?? 90) + (status?.offsetHeight ?? 20) + 45) / zoom);
     this.bottom = this.h - ((hud?.offsetHeight ?? 180) + 26) / zoom;
     this.goal = Math.min(85, this.w * .15); this.spawnX = this.w - 135;
-    this.laneCount = this.bottom - this.top > 265 ? 3 : this.bottom - this.top > 170 ? 2 : 1;
-    this.laneGap = Math.min(115, Math.max(75, (this.bottom - this.top - 100) / Math.max(1, this.laneCount - 1)));
+    this.laneCount = this.bottom - this.top > 390 ? 3 : this.bottom - this.top > 305 ? 2 : 1;
+    this.laneGap = Math.min(115, Math.max(50, (this.bottom - this.top - 220) / Math.max(1, this.laneCount - 1)));
     for (const enemy of this.swarm) if (!enemy.dead) {
       enemy.sprite.setPosition(this.goal + (enemy.sprite.x - oldGoal) / Math.max(1, oldSpawn - oldGoal) * (this.spawnX - this.goal), this.laneY(enemy.lane % this.laneCount));
       enemy.lane %= this.laneCount;
@@ -151,6 +185,7 @@ export class TypingScene extends DungeonScene {
     this.guardian?.setPosition(this.w - 60, (this.top + this.bottom) / 2 + 20);
     this.moveTo = null;
     if (this.scenery) this.paintStormMap();
+    this.paintTowerPads();
   }
 
   private paintStormMap() {
@@ -173,7 +208,141 @@ export class TypingScene extends DungeonScene {
     this.scenery.add(this.add.text(this.goal, roadBottom + 12, '수호선', { resolution: 3, fontFamily: FONT, fontSize: '12px', color: '#d9eeff', stroke: '#0d2435', strokeThickness: 3 }).setOrigin(.5, 0));
   }
 
+  editTowers() {
+    if (!this.isRunning() || (this.typingPaused && !this.towerEditing)) return;
+    this.towerEditing = true; this.moveTo = null; this.setPaused(true);
+    this.paintTowerPads(); this.publish();
+  }
+  closeTowers() {
+    if (!this.towerEditing) return;
+    this.towerEditing = this.towerMoving = false; this.towerRune = null; this.towerSelected = null;
+    this.setPaused(false); this.paintTowerPads(); this.publish();
+  }
+  chooseTowerRune(initial: string) {
+    if (!this.towerEditing || !this.fortifications.runes.includes(initial)) return;
+    this.towerRune = initial; this.towerSelected = null; this.towerMoving = false;
+    this.paintTowerPads(); this.publish();
+  }
+  selectTowerSlot(slot: number) {
+    if (!this.towerEditing || !Number.isInteger(slot) || slot < 0 || slot >= TOWER_SLOTS) return;
+    if (this.fortifications.at(slot)) {
+      this.towerSelected = slot; this.towerRune = null; this.towerMoving = false;
+    } else if (this.towerMoving && this.towerSelected !== null) {
+      if (this.fortifications.move(this.towerSelected, slot)) { this.towerSelected = slot; this.towerMoving = false; }
+    } else if (this.towerRune && this.fortifications.build(slot, this.towerRune, this.stormClock)) {
+      this.towerSelected = slot; this.towerRune = null; this.audio.play('clear');
+    }
+    this.paintTowerPads(); this.publish();
+  }
+  upgradeTower(kind: TowerUpgrade) {
+    if (!this.towerEditing || this.towerSelected === null) return;
+    const tower = this.fortifications.at(this.towerSelected);
+    if (!tower) return;
+    const oldInterval = towerStats(tower.upgrades).interval;
+    if (!this.fortifications.upgrade(this.towerSelected, kind)) return;
+    tower.nextShot = this.stormClock + Math.max(0, tower.nextShot - this.stormClock) * towerStats(tower.upgrades).interval / oldInterval;
+    this.audio.play('break'); this.paintTowerPads(); this.publish();
+    const pad = this.towerPads[this.towerSelected], level = this.fortifications.at(this.towerSelected)!.level;
+    const glow = this.add.circle(pad.x, pad.y + 10, 14).setStrokeStyle(2, level >= 4 ? 0xffdf9b : 0x9fefff, .8).setDepth(601);
+    this.tweens.add({ targets: glow, scale: 2.4, alpha: 0, duration: 420, onComplete: () => glow.destroy() });
+  }
+  moveTower() {
+    if (!this.towerEditing || this.towerSelected === null || !this.fortifications.at(this.towerSelected)) return;
+    this.towerMoving = true; this.towerRune = null; this.paintTowerPads(); this.publish();
+  }
+  private towerRange(scale: number) { return Math.max(260, (this.bottom - this.top) / 2 + 40) * scale; }
+  private paintTowerPads() {
+    if (!this.towerReach) return;
+    this.towerReach.clear();
+    const left = this.goal + Math.min(100, (this.spawnX - this.goal) * .22), right = this.spawnX - 30;
+    for (let slot = 0; slot < this.towerPads.length; slot++) {
+      const pad = this.towerPads[slot], tower = this.fortifications.at(slot);
+      const selected = this.towerEditing && slot === this.towerSelected;
+      const available = this.towerEditing && !tower && Boolean(this.towerRune || this.towerMoving);
+      pad.setPosition(Phaser.Math.Linear(left, right, slot % 3 / 2), slot < 3 ? this.top + 22 : this.bottom - 30);
+      const [stone, illustration, glyph, label] = pad.list as [Phaser.GameObjects.Graphics, Phaser.GameObjects.Image, Phaser.GameObjects.Text, Phaser.GameObjects.Text];
+      const color = selected ? 0xffe2a0 : available ? 0xacf1cf : 0x8fcee6;
+      stone.clear().fillStyle(0x123349, tower ? .4 : .2).fillEllipse(0, 17, 57, 24)
+        .lineStyle(selected ? 2.5 : 1.2, color, tower || available ? .8 : .32).strokeEllipse(0, 17, 58, 25);
+      if (!tower) stone.lineStyle(1, color, .3).strokeCircle(0, -3, 17);
+      const appearance = towerAppearance(tower?.level ?? 1), size = Math.min(appearance.size, Math.max(54, (right - left) / 2 * .88));
+      illustration.setTexture(appearance.texture).setVisible(Boolean(tower)).setDisplaySize(size, size).setTint(tower && tower.level >= 5 ? 0xffefce : 0xffffff);
+      glyph.setPosition((appearance.runeX - .5) * size, (appearance.runeY - .73) * size).setColor(tower && tower.level >= 5 ? '#ffe3a5' : '#effbff');
+      glyph.setFontSize(tower ? 17 : 15).setStroke('#102538', tower ? 2 : 3).setText(tower ? towerGlyph(tower.initial) : '+').setAlpha(tower || this.towerEditing ? 1 : .5);
+      label.setText(`${towerSlotName(slot)}${tower ? ` · Lv.${tower.level}` : ''}`).setAlpha(tower || this.towerEditing ? 1 : .5);
+      if (selected && tower) this.towerReach.fillStyle(0x9ae3ff, .045).fillCircle(pad.x, pad.y, this.towerRange(towerStats(tower.upgrades).range))
+        .lineStyle(1, 0xa5e7ff, .35).strokeCircle(pad.x, pad.y, this.towerRange(towerStats(tower.upgrades).range));
+    }
+  }
+  private updateTowers() {
+    for (const tower of this.fortifications.towers) {
+      if (this.stormClock < tower.nextShot) continue;
+      const pad = this.towerPads[tower.slot], stats = towerStats(tower.upgrades);
+      const targets = this.swarm.filter(enemy => !enemy.dead && towerInitial(typingPair(enemy.word, this.round).answer) === tower.initial
+        && Phaser.Math.Distance.Between(pad.x, pad.y, enemy.sprite.x, enemy.sprite.y) <= this.towerRange(stats.range)).sort((a, b) => a.sprite.x - b.sprite.x);
+      if (!targets.length) continue;
+      tower.nextShot = this.stormClock + stats.interval; tower.shots++;
+      const appearance = towerAppearance(tower.level), illustration = pad.list[1] as Phaser.GameObjects.Image;
+      const muzzleY = pad.y - appearance.muzzle * illustration.displayWidth / appearance.size, size = 39 + Math.min(9, tower.level - 1);
+      for (let index = 0; index < stats.projectiles; index++) {
+        // Distribute a volley across matching targets; spare shots focus the nearest ones.
+        const target = targets[index % targets.length], spread = index - (stats.projectiles - 1) / 2;
+        const angle = Math.atan2(target.sprite.y - 12 - muzzleY, target.sprite.x - pad.x) + spread * .2;
+        const image = this.add.image(pad.x + spread * 3, muzzleY, 'guardian-missile').setDepth(704).setRotation(angle);
+        image.setDisplaySize(size, size * image.frame.realHeight / image.frame.realWidth);
+        this.towerMissiles.push({ image, target, initial: tower.initial, damage: stats.damage, expires: this.stormClock + 2200,
+          trailAt: 0, slot: tower.slot, range: stats.range, vx: Math.cos(angle) * .72, vy: Math.sin(angle) * .72 });
+      }
+      const glow = this.add.circle(pad.x, muzzleY, 6, 0xc9f6ff, .65).setDepth(703);
+      this.tweens.add({ targets: glow, scale: 2, alpha: 0, duration: 170, onComplete: () => glow.destroy() });
+    }
+  }
+
+  private updateTowerMissiles(dt: number) {
+    this.towerMissiles = this.towerMissiles.filter(missile => {
+      if (this.stormClock >= missile.expires) { missile.image.destroy(); return false; }
+      if (missile.target.dead) {
+        const pad = this.towerPads[missile.slot];
+        const replacement = this.swarm.filter(enemy => !enemy.dead && towerInitial(typingPair(enemy.word, this.round).answer) === missile.initial
+          && Phaser.Math.Distance.Between(pad.x, pad.y, enemy.sprite.x, enemy.sprite.y) <= this.towerRange(missile.range))
+          .sort((a, b) => a.sprite.x - b.sprite.x)[0];
+        if (!replacement) { missile.image.destroy(); return false; }
+        missile.target = replacement;
+      }
+      const target = missile.target, image = missile.image;
+      const dx = target.sprite.x - image.x, dy = target.sprite.y - 12 - image.y;
+      const distance = Math.hypot(dx, dy), step = dt * .72;
+      const steer = 1 - Math.exp(-dt / 90);
+      missile.vx += (dx / Math.max(1, distance) * .72 - missile.vx) * steer;
+      missile.vy += (dy / Math.max(1, distance) * .72 - missile.vy) * steer;
+      image.setRotation(Math.atan2(missile.vy, missile.vx));
+      if (distance <= step + 12) {
+        const hit = this.add.circle(target.sprite.x, target.sprite.y - 12, 6).setStrokeStyle(2, 0xbdf1ff, .9).setDepth(705);
+        this.tweens.add({ targets: hit, scale: 2.5, alpha: 0, duration: 180, onComplete: () => hit.destroy() });
+        target.hp -= missile.damage; image.destroy();
+        if (target.hp <= 0) {
+          const wasTypingTarget = this.committedInput && normalizeTyping(typingPair(target.word, this.round).answer).startsWith(normalizeTyping(this.committedInput));
+          this.destroyMinion(target);
+          if (wasTypingTarget && !this.swarm.some(enemy => !enemy.dead && normalizeTyping(typingPair(enemy.word, this.round).answer).startsWith(normalizeTyping(this.committedInput)))) {
+            this.resetInput(); this.resultText = `${towerGlyph(missile.initial)} 탑이 대상 처치 · 다음 답을 입력하세요`; this.resultUntil = this.stormClock + 1800; this.resultRecord = false;
+            this.publish(true);
+          }
+        }
+        return false;
+      }
+      if (this.stormClock >= missile.trailAt) {
+        missile.trailAt = this.stormClock + 45;
+        const trail = this.add.circle(image.x, image.y, 2.5, 0x9de6ff, .45).setDepth(702);
+        this.tweens.add({ targets: trail, alpha: 0, scale: .2, duration: 180, onComplete: () => trail.destroy() });
+      }
+      image.x += missile.vx * dt; image.y += missile.vy * dt;
+      return true;
+    });
+  }
+
   private beginWave() {
+    for (const missile of this.towerMissiles) missile.image.destroy();
+    this.towerMissiles = [];
     this.waveClock = this.stormClock; this.waveSpawned = 0; this.waveEndsAt = 0; this.spawnAt = this.stormClock + 2500;
     this.resetInput(); this.publish(true);
     const count = Math.min(this.laneCount, this.memories.length);
@@ -193,8 +362,10 @@ export class TypingScene extends DungeonScene {
     sprite.once('destroy', () => shadow.destroy());
     const pair = typingPair(word, this.round);
     const label = this.add.text(x, y - 48, pair.prompt, { resolution: 3, fontFamily: FONT, fontSize: pair.prompt.length > 22 ? '12px' : '15px', fontStyle: 'bold', color: '#f7f3e9', backgroundColor: '#0c2034ed', stroke: '#071526', strokeThickness: 2, padding: { x: 7, y: 4 }, align: 'center', wordWrap: { width: Math.min(165, this.w * .34), useAdvancedWrap: true } }).setOrigin(.5, 1).setDepth(800);
+    const rune = this.add.text(x + 31, y - 12, towerGlyph(towerInitial(pair.answer)), { resolution: 3, fontFamily: FONT, fontSize: '13px', fontStyle: 'bold', color: '#b7edff', backgroundColor: '#112c42', padding: { x: 4, y: 2 } }).setOrigin(.5).setDepth(802);
+    sprite.once('destroy', () => rune.destroy());
     const aura = this.add.circle(x, y - 8, 35, 0xff4935, .18).setStrokeStyle(2, 0xffb869, .55).setVisible(false);
-    const enemy: StormMinion = { word, sprite, label, aura, shadow, walk: newWalk(this.waveSpawned + this.round * 3), kind, health: this.add.graphics().setDepth(801), lane, hp: 100, color, burn: 0, dead: false, heat: 0 };
+    const enemy: StormMinion = { word, sprite, label, aura, rune, shadow, walk: newWalk(this.waveSpawned + this.round * 3), kind, health: this.add.graphics().setDepth(801), lane, hp: 100, color, burn: 0, dead: false, heat: 0 };
     this.swarm.push(enemy); this.waveSpawned++;
     this.publish(); return enemy;
   }
@@ -275,15 +446,23 @@ export class TypingScene extends DungeonScene {
       else { target.hp = Math.max(1, target.hp - 28); target.burn = this.stormClock + 1800; }
     }
     if (record) this.recordShockwave(origin.x, origin.y, targets);
+    const towerReward = this.fortifications.earn(answer, tier);
     this.resultRecord = record; this.resultUntil = this.stormClock + 2500;
-    this.resultText = `${record ? '기록 경신 · ' : ''}${tier ? `${Math.min(tier, targets.length)}연쇄 폭발` : '불꽃 피해'} · ${rate.toFixed(3)}초/글자`;
+    this.resultText = `${towerReward ? '탑 포인트 +1 · ' : ''}${record ? '기록 경신 · ' : ''}${tier ? `${Math.min(tier, targets.length)}연쇄 폭발` : '불꽃 피해'} · ${rate.toFixed(3)}초/글자`;
     this.resetInput(); this.publish(true);
+    if (towerReward) {
+      const initial = towerInitial(answer), existing = this.fortifications.towers.find(tower => tower.initial === initial);
+      this.towerSelected = existing?.slot ?? null;
+      this.towerRune = existing ? null : initial;
+      this.towerMoving = false;
+      this.lightning.clear(); this.fire.clear();
+      this.editTowers();
+    }
   }
 
   private recordShockwave(x: number, y: number, directTargets: StormMinion[]) {
     const radius = Math.min(180, this.w * .35);
     this.explosion(x, y, 0xe6faff, radius);
-    this.cameras.main.shake(160, .003);
     for (const enemy of this.swarm) {
       if (enemy.dead || directTargets.includes(enemy)) continue;
       const distance = Phaser.Math.Distance.Between(x, y, enemy.sprite.x, enemy.sprite.y);
@@ -298,7 +477,7 @@ export class TypingScene extends DungeonScene {
     enemy.dead = true; this.stormKills++; this.stormScore += 45;
     enemy.shadow.destroy();
     this.explosion(enemy.sprite.x, enemy.sprite.y - 8, 0xffa657, 60);
-    enemy.label.destroy(); enemy.aura.destroy(); enemy.health.destroy();
+    enemy.label.destroy(); enemy.aura.destroy(); enemy.health.destroy(); enemy.rune.destroy();
     this.tweens.add({ targets: enemy.sprite, alpha: 0, scaleX: enemy.sprite.scaleX * 1.3, scaleY: enemy.sprite.scaleY * 1.3, duration: 180, onComplete: () => enemy.sprite.destroy() });
   }
   private explosion(x: number, y: number, color: number, radius: number) {
@@ -335,6 +514,7 @@ export class TypingScene extends DungeonScene {
       const target = this.swarm.find(enemy => !enemy.dead && normalizeTyping(typingPair(enemy.word, this.round).answer) === normalizeTyping(pending.value));
       if (target && this.rawInput === pending.value) this.completeSpell(target, pending.completedAt);
     }
+    if (this.typingPaused || this.typingFinished) return;
     if (this.moveTo) {
       const distance = Phaser.Math.Distance.Between(this.typingPlayer.x, this.typingPlayer.y, this.moveTo.x, this.moveTo.y), step = dt * .2;
       if (distance < step) { this.typingPlayer.setPosition(this.moveTo.x, this.moveTo.y); this.moveTo = null; }
@@ -352,11 +532,12 @@ export class TypingScene extends DungeonScene {
       if (enemy.burn > this.stormClock) { enemy.hp -= dt * .008; if (enemy.hp <= 0) { this.destroyMinion(enemy); continue; } }
       if (enemy.sprite.x < this.goal) {
         enemy.dead = true; this.stormLeaks++; this.healthPoints = Math.max(0, this.healthPoints - 12); this.stormScore -= 50; this.stormCombo = 0;
-        for (const part of [enemy.sprite, enemy.label, enemy.aura, enemy.health]) part.destroy();
+        for (const part of [enemy.sprite, enemy.label, enemy.aura, enemy.health, enemy.rune]) part.destroy();
         this.audio.play('hurt'); this.resultText = '수호선 돌파 · 생명력 −12'; this.resultUntil = this.stormClock + 1800; this.resultRecord = false;
         if (!this.healthPoints) { this.endStorm(false); return; }
       }
     }
+    this.updateTowerMissiles(dt); this.updateTowers();
     const view = this.currentView(); this.lightning.clear(); this.fire.clear();
     if (this.connected.length) this.typingPlayer.setFlipX(this.connected[0].sprite.x < this.typingPlayer.x);
     for (const enemy of this.swarm) if (!enemy.dead) {
@@ -374,6 +555,7 @@ export class TypingScene extends DungeonScene {
       } else { enemy.sprite.setTint(enemy.color); enemy.aura.setVisible(false); }
       if (linked) this.strokeBolt(this.lightning, enemy.sprite.x, enemy.sprite.y - 12, enemy.lane);
       enemy.sprite.setDepth(enemy.sprite.y); enemy.label.setPosition(enemy.sprite.x, enemy.sprite.y - 48);
+      enemy.rune.setPosition(enemy.sprite.x + 31, enemy.sprite.y - 12).setText(towerGlyph(towerInitial(pair.answer)));
       enemy.health.clear().fillStyle(0x071423, .9).fillRoundedRect(enemy.sprite.x - 26, enemy.sprite.y - 43, 52, 5, 2);
       enemy.health.fillStyle(burning ? 0xff6943 : enemy.color).fillRoundedRect(enemy.sprite.x - 25, enemy.sprite.y - 42, Math.max(0, enemy.hp / 100 * 50), 3, 1);
     }
@@ -418,7 +600,9 @@ export class TypingScene extends DungeonScene {
       level: 1, xp: 0, xpNeeded: 1, upgrades: { sword: 0, bow: 0, hammer: 0 }, attackBoost: 0, haste: 1, burst: 0, charge: 0,
       mode: 'typing', bossArrows: 0, bossMinions: alive, bossColumns: this.laneCount, bossRoundKills: this.stormKills, bossKillGoal: this.quota(),
       bossFireInterval: 0, bossGuided: 0, bossLeaks: this.stormLeaks, bossAutoFire: false, miniBosses: 0,
-      typing: { round: this.round, reversed: this.round >= 7, spawned: this.waveSpawned, quota: this.quota(), nextSpawn: Math.max(0, this.spawnAt - this.stormClock), best },
+      typing: { round: this.round, reversed: this.round >= 7, spawned: this.waveSpawned, quota: this.quota(), nextSpawn: Math.max(0, this.spawnAt - this.stormClock), best,
+        fortifications: { points: this.fortifications.points, runes: [...this.fortifications.runes], towers: this.fortifications.towers.map(({ slot, initial, level, upgrades }) => ({ slot, initial, level, upgrades: { ...upgrades } })),
+          editing: this.towerEditing, rune: this.towerRune, selected: this.towerSelected, moving: this.towerMoving } },
     };
   }
   private publish(clearInput = false) {

@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import type { TowerView } from './towers';
 import { COLORS, DEFAULT_WORDS, ROOM_NAMES, wordGroups, type Word, type WeaponKind } from './data';
 import { resolveStrike } from './progress';
 import { GameAudio } from './audio';
@@ -50,7 +51,7 @@ export interface Snapshot {
   mode: RunMode; bossArrows: number; bossMinions: number; bossColumns: number; bossRoundKills: number; bossKillGoal: number;
   bossFireInterval: number; bossGuided: number; bossLeaks: number;
   bossAutoFire: boolean; miniBosses: number;
-  typing?: { round: number; reversed: boolean; spawned: number; quota: number; nextSpawn: number; best: number | null };
+  typing?: { round: number; reversed: boolean; spawned: number; quota: number; nextSpawn: number; best: number | null; fortifications: TowerView };
 }
 export type GameEvent =
   | { type: 'ready' }
@@ -159,6 +160,8 @@ export class DungeonScene extends Phaser.Scene {
     for (const theme of ['defense', 'meadow', 'library', 'forge', 'frost']) this.load.image(`background-${theme}`, `/assets/art/${theme}.png`);
     this.load.image('background-tempest', '/assets/art/tempest.png');
     this.load.image('lightning-mage', '/assets/art/lightning-mage.png');
+    for (let stage = 1; stage <= 4; stage++) this.load.image(`guardian-evolution-${stage}`, `/assets/art/guardian-evolution-${stage}.png`);
+    this.load.image('guardian-missile', '/assets/art/guardian-missile.png');
     for (const atlas of ['characters', 'weapons']) {
       this.load.image(`${atlas}-source`, `/assets/art/${atlas}.png`);
       this.load.json(`${atlas}-frames`, `/assets/art/${atlas}.json`);

@@ -6,14 +6,17 @@ async function start(page: Page) {
   await expect(page.locator('#typing-input')).toBeFocused();
 }
 async function fixtures(page: Page) {
-  return page.evaluate(() => {
+  const answer = await page.evaluate(() => {
     const s = (window as any).__wordmaster.typingScene;
+    s.closeTowers(); // Finish the earned reward before the next typing fixture.
     for (const m of s.swarm) for (const part of [m.sprite, m.label, m.aura, m.health]) part.destroy();
     s.swarm = []; s.waveSpawned = 0; s.spawnAt = 1e9; s.waveEndsAt = 0; s.resetInput(); s.speedRecords = {};
     const word = s.memories[0];
     for (let i = 0; i < 3; i++) { const m = s.spawnMinion(i, 650); m.word = word; m.label.setText(word.meaning); }
     s.publish(true); return word.word;
   });
+  await page.locator('#typing-input').focus();
+  return answer;
 }
 
 test('mixed monsters, white lightning, ignition and wrong-input disconnection', async ({ page }) => {
@@ -64,6 +67,7 @@ test('Korean IME survives partial jamo, reversal uses prompt as answer, and paus
   await start(page);
   const prompt = await page.evaluate(() => {
     const s = (window as any).__wordmaster.typingScene;
+    s.closeTowers(); // Finish the earned reward before the next typing fixture.
     for (const m of s.swarm) for (const part of [m.sprite, m.label, m.aura, m.health]) part.destroy();
     s.swarm = []; s.round = 7; s.beginWave(); s.spawnAt = 1e9;
     return { answer: s.swarm[0].word.meaning, label: s.swarm[0].label.text, word: s.swarm[0].word.word };
@@ -110,6 +114,7 @@ test('threshold settings validate and persist, custom question decks work, and r
   await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.state.alive)).toBe(3);
   await page.keyboard.type('56'); await expect(page.locator('#typing-input')).toHaveValue('');
   await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.state.kills)).toBe(1);
+  await page.locator('#tower-close').click();
   await page.keyboard.press('Escape'); await page.locator('#restart-button').click();
   await expect.poll(() => page.evaluate(() => (window as any).__wordmaster.state.kills)).toBe(0);
   await page.reload(); await page.locator('#typing-settings-button').click();
@@ -124,7 +129,7 @@ test('title, spell dock and battlefield fit mobile and short desktop screens', a
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.evaluate(() => { const s = (window as any).__wordmaster.typingScene; return s.bottom > s.top + 100; })).toBe(true);
-    await page.screenshot({ path: `C:/Users/user/AppData/Local/Temp/wordmaster-typing-${viewport.width}.png` });
+    await page.screenshot({ path: test.info().outputPath(`typing-${viewport.width}.png`) });
   }
 });
 
@@ -148,6 +153,7 @@ test('connections narrow with elapsed time, hints resume input, and all twelve r
       for (let count = 0; count < 30; count++) {
         for (const m of s.swarm.filter((m: any) => !m.dead)) {
           s.acceptTyping(''); s.acceptTyping(s.round < 7 ? m.word.word : m.word.meaning, false, '', true);
+          s.closeTowers(); // Each highest-tier cast now opens a paused reward choice.
         }
         if (s.waveSpawned >= s.quota()) break;
         s.spawnMinion(s.waveSpawned % s.laneCount, s.spawnX);

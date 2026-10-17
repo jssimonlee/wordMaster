@@ -5,6 +5,7 @@ import { loadProgress, mastery, recordAttempt, saveProgress } from './progress';
 import { mountGame, type DungeonScene, type GameEvent, type RunMode, type Snapshot } from './game';
 import { BOSS_UPGRADE_INTERVAL, experienceNeeded, type UpgradeId, type UpgradeOption, type BossUpgradeId, type BossUpgradeOption } from './upgrades';
 import { TypingScene } from './typing-game';
+import { TOWER_SLOTS, MAX_TOWER_PROJECTILES, TOWER_UPGRADE_KEYS, TOWER_UPGRADE_NAMES, freshTowerUpgrades, isTowerUpgrade, towerAppearance, towerGlyph, towerSlotName, towerStats, towerUpgradeStats, type TowerUpgrade, type TowerView } from './towers';
 import { DEFAULT_TYPING_SETTINGS, loadTypingSettings, saveTypingSettings, validateTypingSettings, TYPING_MAP_NAME, type TypingView } from './typing';
 
 const paths: Record<string, string> = {
@@ -18,6 +19,7 @@ const paths: Record<string, string> = {
   pause: '<path d="M8 5v14M16 5v14"/>',
   play: '<path d="m8 4 12 8-12 8V4Z"/>',
   arrow: '<path d="M4 12h16m-6-6 6 6-6 6"/>',
+  target: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/>',
   diamond: '<path d="m12 2 9 10-9 10L3 12 12 2Z"/><path d="m12 7 4 5-4 5-4-5 4-5Z"/>',
   heart: '<path d="M20 5c-3-3-6-1-8 1-2-2-5-4-8-1-5 5 2 11 8 16 6-5 13-11 8-16Z"/>',
   bolt: '<path d="m13 2-9 12h7l-1 8 10-13h-8l1-7Z"/>',
@@ -98,6 +100,76 @@ function renderTypingDock() {
   el('armory').innerHTML = `<section class="spell-dock" aria-label="타이핑 마법"><div class="spell-caption"><span>${icon('bolt')} 마법 각인</span><span id="typing-chain">모든 일치 적 연결</span></div><div class="spell-entry"><div id="typing-runes" aria-hidden="true">답을 타이핑해 번개를 연결하세요</div><input id="typing-input" aria-label="마법 타이핑" autocomplete="off" autocapitalize="off" spellcheck="false" /></div><div class="spell-heat"><i id="typing-heat"></i></div><div class="spell-footer"><span id="typing-signal" role="status">70%부터 붉게 점화</span><span id="typing-rate">— 초 / 글자</span></div></section>`;
   const input = el<HTMLInputElement>('typing-input');
   clearTypingInput = bindTypingInput(input);
+  el('typing-chain').insertAdjacentHTML('afterend', '<button id="tower-button" class="tower-button" type="button">탑 건설 · <span id="tower-points">0</span>P</button>');
+  el('tower-button').addEventListener('click', () => { if (overlay === 'none' && !modalOpen) typingScene.editTowers(); });
+  el('tower-panel')?.remove();
+  document.querySelector('.game-stage')!.insertAdjacentHTML('beforeend', '<aside id="tower-panel" class="tower-panel" role="dialog" aria-labelledby="tower-title" hidden></aside>');
+  el('tower-panel').addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
+    if (!button || button.disabled) return;
+    if (button.dataset.rune !== undefined) typingScene.chooseTowerRune(button.dataset.rune);
+    else if (button.dataset.towerSlot !== undefined) typingScene.selectTowerSlot(Number(button.dataset.towerSlot));
+    else if (button.dataset.towerUpgrade && isTowerUpgrade(button.dataset.towerUpgrade)) typingScene.upgradeTower(button.dataset.towerUpgrade);
+    else if (button.id === 'tower-move') typingScene.moveTower();
+    else if (button.id === 'tower-close') { typingScene.closeTowers(); focusBattle(); }
+  });
+}
+
+function renderTowerState(view: TowerView) {
+  if (!el('tower-panel') || !el('tower-points')) return;
+  el<HTMLInputElement>('typing-input').readOnly = view.editing;
+  el('tower-points').textContent = String(view.points);
+  el('tower-button').classList.toggle('ready', view.points > 0);
+  const panel = el('tower-panel');
+  if (!view.editing) { panel.hidden = true; panel.dataset.state = ''; return; }
+  const key = JSON.stringify(view);
+  if (panel.dataset.state === key) return;
+  const wasHidden = panel.hidden;
+  const focused = document.activeElement instanceof HTMLButtonElement && panel.contains(document.activeElement)
+    ? { id: document.activeElement.id, rune: document.activeElement.dataset.rune, slot: document.activeElement.dataset.towerSlot } : null;
+  panel.hidden = false; panel.dataset.state = key;
+  const selected = view.towers.find(tower => tower.slot === view.selected);
+  const level = selected?.level ?? 1, appearance = towerAppearance(level), next = towerAppearance(level + 1);
+  const initial = selected?.initial ?? view.rune, glyph = initial ? escape(towerGlyph(initial)) : '＋';
+  const upgrades = selected?.upgrades ?? freshTowerUpgrades(), stats = towerStats(upgrades);
+  const value = (kind: TowerUpgrade, values = stats) => ({ power: values.damage.toFixed(1), speed: `${(values.interval / 1000).toFixed(2)}초`, volley: `${values.projectiles}발`, range: `${Math.round(values.range * 100)}%` })[kind];
+  const symbols: Record<TowerUpgrade, string> = { power: 'sword', speed: 'bolt', volley: 'bow', range: 'target' };
+  const upgradeChoices = selected ? TOWER_UPGRADE_KEYS.map(kind => {
+    const capped = kind === 'volley' && stats.projectiles >= MAX_TOWER_PROJECTILES;
+    return `<button id="tower-upgrade${kind === 'power' ? '' : `-${kind}`}" type="button" data-tower-upgrade="${kind}" ${view.points < 1 || capped ? 'disabled' : ''} aria-label="${TOWER_UPGRADE_NAMES[kind]} 강화 ${value(kind)}에서 ${value(kind, towerUpgradeStats(upgrades, kind))} · 1P"><span class="tower-upgrade-icon">${icon(symbols[kind])}</span><span class="tower-upgrade-detail"><strong>${TOWER_UPGRADE_NAMES[kind]} <small>+${upgrades[kind]}</small></strong><span>${value(kind)} <b>→ ${value(kind, towerUpgradeStats(upgrades, kind))}</b></span></span><small class="tower-upgrade-cost">${capped ? '최대' : '◆ 1P'}</small></button>`;
+  }).join('') : '';
+  const portrait = (form: ReturnType<typeof towerAppearance>, letter: string, cls = '') => `<div class="tower-portrait ${cls}" style="--rune-x:${form.runeX * 100}%;--rune-y:${form.runeY * 100}%" aria-hidden="true"><img src="/assets/art/${form.texture}.png" alt="" draggable="false" /><b>${letter}</b></div>`;
+  const note = view.moving ? '이동할 빈 칸을 선택하세요 · 무료 이동' : view.rune ? `${towerGlyph(view.rune)} 탑을 배치할 빈 칸을 선택하세요 · 건설 1P` : selected ? '강화하거나 다른 빈 칸으로 이동할 수 있습니다.' : '각인을 고른 뒤 빈 칸에 탑을 건설하세요.';
+  const stat = (label: string, value: string) => `<div><small>${label}</small><strong>${value}</strong></div>`;
+  panel.innerHTML = `
+    <header class="tower-heading"><span class="tower-crest" aria-hidden="true">${icon('bolt')}</span><div><small>DEFENSE · 전투 일시정지</small><h2 id="tower-title">수호탑 지휘소</h2></div><div class="tower-currency" aria-label="보유 탑 포인트 ${view.points}"><span aria-hidden="true">◆</span><strong>${view.points}</strong><small>P</small></div></header>
+    <div class="tower-content">
+      <section class="tower-selection" aria-label="선택한 수호탑">
+        <div class="tower-showcase">
+          ${portrait(appearance, glyph)}
+          <div class="tower-identity"><small>${selected ? `${towerSlotName(selected.slot)} 전선 · 선택한 수호탑` : '신규 건설 · 1P'}</small><h3>${appearance.name}</h3><strong class="tower-level">Lv.${level}</strong><div class="tower-evolution" aria-label="외형 ${appearance.stage} / 4단계">${[1, 2, 3, 4].map(stage => `<i class="${stage <= appearance.stage ? 'lit' : ''}"></i>`).join('')}</div><p>${initial ? `<b>${glyph}</b>로 시작하는 적을` : '같은 각인의 적을'}<br>자동으로 추적 사격</p></div>
+        </div>
+        <div class="tower-stats" aria-label="현재 능력">
+          ${stat('한 발 공격력', value('power'))}
+          ${stat('공격 간격', value('speed'))}
+          ${stat('동시 발사', value('volley'))}
+          ${stat('사거리', value('range'))}
+        </div>
+        ${selected ? `<div class="tower-next">${portrait(next, glyph, 'mini')}<div><small>NEXT · Lv.${level + 1}</small><strong>${next.name}</strong><span>${next.stage > appearance.stage ? '어떤 능력을 강화해도 외형이 진화합니다' : '최종 외형 · 능력은 계속 강화할 수 있습니다'}</span></div></div><div class="tower-section-heading tower-upgrade-heading"><h3>강화할 능력 선택</h3><span>선택한 능력만 강화 · 각 1P</span></div><div class="tower-upgrade-options" aria-label="강화 방향 선택">${upgradeChoices}</div><p class="tower-volley-guide">다중 발사는 같은 각인의 적에게 나누어 발사하고, 적이 하나면 집중 사격합니다. 최대 ${MAX_TOWER_PROJECTILES}발.</p>` : '<p class="tower-build-hint">최고 등급 정답으로 얻은 각인을 전선에 배치하세요.<br>설치 후 공격력 · 연사 · 다중 발사 · 사거리를 골라 강화합니다.</p>'}
+      </section>
+      <section class="tower-deployment" aria-label="수호탑 배치">
+        <div class="tower-section-heading"><h3>전선 배치 <small>${view.towers.length} / ${TOWER_SLOTS}</small></h3>${selected ? `<button id="tower-move" type="button" aria-pressed="${view.moving}" ${view.towers.length === TOWER_SLOTS ? 'disabled' : ''}>${view.moving ? '이동 위치 선택 중' : '위치 옮기기'}</button>` : '<span>칸 선택으로 건설</span>'}</div>
+        <div class="tower-tactical-map"><span class="tower-map-label">북쪽 전선</span><div class="tower-slot-grid" aria-label="위쪽과 아래쪽 고정 배치 칸">${Array.from({ length: TOWER_SLOTS }, (_, slot) => {
+          const tower = view.towers.find(item => item.slot === slot), empty = !tower;
+          return `<button type="button" data-tower-slot="${slot}" aria-label="${towerSlotName(slot)} 칸${tower ? ` ${escape(towerGlyph(tower.initial))} 탑 레벨 ${tower.level}` : ' 빈 자리'}" aria-pressed="${view.selected === slot}" class="${tower ? 'occupied' : ''} ${empty && (view.rune || view.moving) ? 'available' : ''}"><small>${towerSlotName(slot)}</small><strong>${tower ? escape(towerGlyph(tower.initial)) : '+'}</strong><small>${tower ? `Lv.${tower.level}` : '빈 자리'}</small></button>`;
+        }).join('')}</div><div class="tower-map-path" aria-hidden="true"><span>수호선</span><i>‹ ‹ ‹</i><span>적 진입</span></div><span class="tower-map-label south">남쪽 전선</span></div>
+        <p class="tower-note" role="status">${escape(note)}</p>
+      </section>
+      <section class="tower-arsenal"><div class="tower-section-heading"><h3>건설 각인</h3><span>한 기당 ◆ 1P</span></div><div class="tower-runes" aria-label="건설할 첫 글자">${view.runes.length ? view.runes.map(rune => `<button type="button" data-rune="${escape(rune)}" aria-label="${escape(towerGlyph(rune))} 탑 건설" aria-pressed="${view.rune === rune}" ${view.points < 1 ? 'disabled' : ''}>${escape(towerGlyph(rune))}</button>`).join('') : '<span>최고 등급 정답으로 각인과 1P를 획득하세요.</span>'}</div></section>
+    </div>
+    <footer class="tower-footer"><button id="tower-close" type="button">${icon('play')} 전투 재개 <kbd>Esc</kbd></button><small>창 밖 전장을 클릭해도 전투가 재개됩니다</small></footer>`;
+  if (wasHidden) panel.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus({ preventScroll: true });
+  else if (focused) Array.from(panel.querySelectorAll<HTMLButtonElement>('button')).find(button => !button.disabled && (focused.id ? button.id === focused.id : focused.rune !== undefined ? button.dataset.rune === focused.rune : button.dataset.towerSlot === focused.slot))?.focus({ preventScroll: true });
 }
 
 function bindTypingInput(input: HTMLInputElement): () => void {
@@ -150,6 +222,7 @@ function renderTypingView(view: TypingView, clearInput = false) {
 
 function updateTypingState(next: Snapshot) {
   const wave = next.typing!;
+  renderTowerState(wave.fortifications);
   document.querySelector<HTMLElement>('.game-stage')!.dataset.environment = 'tempest';
   el('room-index').textContent = String(wave.round).padStart(2, '0'); el('room-title').textContent = TYPING_MAP_NAME;
   el('room-tag').textContent = wave.reversed ? 'REVERSE' : 'SPELL'; el('room-tag').classList.remove('boss');
@@ -160,7 +233,7 @@ function updateTypingState(next: Snapshot) {
   el('wave-status').textContent = wave.reversed ? '답을 보고 문제 입력 · 반전' : '문제를 보고 답 입력';
   el('level-text').textContent = `ROUND ${wave.round} / 12`; el('xp-fill').style.width = `${(wave.round - 1) / 12 * 100}%`;
   el('xp-text').textContent = wave.reversed ? '기억 반전' : '7라운드부터 기억 반전';
-  el('burst-status').textContent = '백색 번개'; el('burst-status').classList.remove('active');
+  el('burst-status').textContent = `수호탑 ${wave.fortifications.towers.length} / ${TOWER_SLOTS}`; el('burst-status').classList.remove('active');
   document.querySelector('.bottom-hud')!.classList.remove('overdrive');
   el('build-label').textContent = `돌파 ${next.bossLeaks}회 · ${wave.best === null ? '첫 입력으로 기록 수립' : `최고 ${wave.best.toFixed(3)}초 / 글자`}`;
   el('combo').textContent = `×${next.combo} COMBO`; el('combo').classList.toggle('hot', next.combo >= 3);
@@ -267,6 +340,7 @@ function showStart() {
 
 function startRun(words: Word[], mode: RunMode = 'campaign') {
   if (!scene || !ready) return;
+  if (el('tower-panel')) el('tower-panel').hidden = true;
   closeModal(false); activeWords = words; activeMode = mode; runCorrect = runWrong = runHints = 0;
   lastArmory = lastRoute = ''; overlay = 'none'; el('game-overlay').hidden = true; el('upgrade-picker').hidden = true;
   clearTimeout(upgradeUnlockTimer); upgradeSelectionReady = false;
@@ -287,6 +361,7 @@ function startRun(words: Word[], mode: RunMode = 'campaign') {
 }
 
 function returnToTitle() {
+  if (activeMode === 'typing') typingScene.closeTowers();
   scene?.setPaused(true);
   closeModal(false);
   clearTimeout(toastTimeout); clearTimeout(upgradeUnlockTimer);
@@ -310,6 +385,7 @@ function hideOverlay() {
 
 function showPause() {
   if (!scene?.isRunning() || overlay !== 'none' || modalOpen) return;
+  if (activeMode === 'typing') typingScene.closeTowers();
   scene.setPaused(true); overlay = 'pause'; el('toast').hidden = true;
   el('game-overlay').hidden = false;
   el('game-overlay').innerHTML = `<div class="overlay-panel"><div class="overlay-symbol">${icon('pause')}</div><div class="eyebrow">TAKE A BREATH</div><h2>잠시 숨 고르기</h2><p>기억도, 모험도 서두를 필요는 없으니까.</p><button id="resume-button" class="primary-button">${icon('play')} 탐험 계속하기</button><button id="restart-button" class="text-button">현재 단어로 처음부터 다시</button><small>ESC를 눌러 돌아갈 수 있어요</small></div>`;
@@ -321,6 +397,7 @@ function showPause() {
 }
 
 function showHint() {
+  if (activeMode === 'typing') typingScene.closeTowers();
   if (!state || !scene?.isRunning() || overlay !== 'none' || modalOpen) return;
   const word = activeMode === 'typing' ? typingScene.hint() : state.words[state.slot];
   scene.setPaused(true); overlay = 'hint'; runHints++;
@@ -430,6 +507,7 @@ function showFinish(won: boolean, final: Snapshot) {
 }
 
 function openModal(content: string, variant: 'standard' | 'codex' | 'workshop' = 'standard') {
+  if (activeMode === 'typing') typingScene.closeTowers();
   if (scene?.isRunning()) scene.setPaused(true);
   modalOpen = true; el('modal-layer').hidden = false;
   el('modal-layer').innerHTML = `<div class="modal ${variant === 'standard' ? '' : `archive-modal ${variant}-modal`}" role="dialog" aria-modal="true" tabindex="-1"><button id="modal-close" class="icon-button modal-close" aria-label="닫기">${icon('close')}</button>${content}</div>`;
@@ -588,6 +666,17 @@ document.querySelector<HTMLAnchorElement>('.arena-menu .brand')!.addEventListene
 el('hint-button').addEventListener('click', () => { if (overlay === 'hint') hideOverlay(); else showHint(); });
 document.addEventListener('keydown', event => {
   if (event.isComposing) return;
+  const towerPanel = el('tower-panel');
+  if (!modalOpen && activeMode === 'typing' && towerPanel && !towerPanel.hidden) {
+    if (event.key === 'Escape') { event.preventDefault(); typingScene.closeTowers(); focusBattle(); }
+    else if (event.key === 'Tab') {
+      event.preventDefault();
+      const buttons = Array.from(towerPanel.querySelectorAll<HTMLButtonElement>('button:not([disabled])'));
+      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      buttons[(index + (event.shiftKey ? buttons.length - 1 : 1)) % buttons.length]?.focus();
+    }
+    return;
+  }
   if (modalOpen && event.key === 'Tab') {
     const targets = Array.from(el('modal-layer').querySelectorAll<HTMLElement>('button:not([disabled]),textarea,input,select,summary,[tabindex="0"]'));
     const first = targets[0], last = targets[targets.length - 1];

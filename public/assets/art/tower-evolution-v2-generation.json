@@ -1,0 +1,35 @@
+{
+  "tool": "built-in image_gen",
+  "created": "2026-10-17",
+  "purpose": "Distinct ramshackle-to-legendary tower progression",
+  "assets": [
+    {
+      "stage": 1,
+      "name": "낡은 목재 초소",
+      "prompt": "Use case: stylized-concept. Asset type: one transparent PNG building sprite for a fantasy tower defense game. Elevated orthographic 3/4 game view, detailed hand-painted 3D RPG artwork, crisp readable silhouette at 90px game size. Square canvas, ONE building centered, whole structure visible, generous transparent margin. Genuine transparent alpha background; NO landscape, backdrop, floor plane, UI, writing, characters, watermark or cast ground shadow. The building's footprint bottom at y88% and its blank front-facing circular dark wooden/metal sign centered x50%, y73% of the square; the game will overlay a letter there, so leave this round sign BLANK. Building sits on a small attached foundation only. This is one stage in a deliberately dramatic poor-to-grand evolution. Do not copy an elegant ivory crystal tower shape into every stage.\nSTAGE ONE, EXTREMELY POOR STARTER: a low, ramshackle makeshift wooden lookout hut, crooked mismatched brown planks, leaning rough posts tied with fraying rope, patchwork rag canopy, rusty brackets, tiny improvised wooden crossbow on top. No stone cylinder, no ornate metal, no glowing crystals, no gold, no grand spire. Visibly shabby and primitive but charming, sturdy enough to function. A few attached broken planks on a rough timber base. Squat asymmetrical silhouette, top begins near y40%; keep the upper 35% transparent, DO NOT enlarge the little hut to fill the canvas. The front blank round wood sign is near y73%. Earth brown and faded beige palette.",
+      "file": "guardian-evolution-1.png",
+      "transparent": true
+    },
+    {
+      "stage": 2,
+      "name": "돌 감시탑",
+      "prompt": "Use case: stylized-concept. Asset type: one transparent PNG building sprite for a fantasy tower defense game. Elevated orthographic 3/4 game view, detailed hand-painted 3D RPG artwork, crisp readable silhouette at 90px game size. Square canvas, ONE building centered, whole structure visible, generous transparent margin. Genuine transparent alpha background; NO landscape, backdrop, floor plane, UI, writing, characters, watermark or cast ground shadow. The building's footprint bottom at y88% and its blank front-facing circular dark wooden/metal sign centered x50%, y73% of the square; the game will overlay a letter there, so leave this round sign BLANK. Building sits on a small attached foundation only. This is one stage in a deliberately dramatic poor-to-grand evolution. Do not copy an elegant ivory crystal tower shape into every stage.\nSTAGE TWO, PRACTICAL STONE WATCHTOWER: a compact square fortress watchtower made from coarse mossy gray stones, sturdy square battlements, wooden stair and heavy timber trim, functional steel ballista on top, iron-rimmed blank round plaque on the front at y73%. Boxy and broad, top near y28%. Clearly substantial masonry replacing a ramshackle wooden hut, but still mundane medieval military architecture. NO luminous crystal crown, NO gold filigree, NO tall white cylindrical spire. Dark gray stone, muted brown timber, small restrained steel blue accents.",
+      "file": "guardian-evolution-2.png",
+      "transparent": true
+    },
+    {
+      "stage": 3,
+      "name": "비전 마법 포대",
+      "prompt": "Use case: stylized-concept. Asset type: one transparent PNG building sprite for a fantasy tower defense game. Elevated orthographic 3/4 game view, detailed hand-painted 3D RPG artwork, crisp readable silhouette at 90px game size. Square canvas, ONE building centered, whole structure visible, generous transparent margin. Genuine transparent alpha background; NO landscape, backdrop, floor plane, UI, writing, characters, watermark or cast ground shadow. The building's footprint bottom at y88% and its blank front-facing circular dark wooden/metal sign centered x50%, y73% of the square; the game will overlay a letter there, so leave this round sign BLANK. Building sits on a small attached foundation only. This is one stage in a deliberately dramatic poor-to-grand evolution. Do not copy an elegant ivory crystal tower shape into every stage.\nSTAGE THREE, ARCANE ARTILLERY PLATFORM: a broad fortified dark blue stone hexagonal bastion with two thick curved silver cannon-like arcane conduits surrounding a brilliant cyan energy orb, silver braces, glowing turquoise circuitry, two little side emitter pods. Wide powerful magical artillery silhouette, top near y17%, brighter and more sophisticated than a mundane watchtower. The front dark round blank rune plaque at y73%. NO gold halo or tall cathedral spire, NO ivory cylindrical look. Restrained purple cloth banner attached. A few contained luminous particles close to the machinery; keep all surrounded by true transparency.",
+      "file": "guardian-evolution-3.png",
+      "transparent": true
+    },
+    {
+      "stage": 4,
+      "name": "백뢰의 성채",
+      "prompt": "Use case: stylized-concept. Asset type: one transparent PNG building sprite for a fantasy tower defense game. Elevated orthographic 3/4 game view, detailed hand-painted 3D RPG artwork, crisp readable silhouette at 90px game size. Square canvas, ONE building centered, whole structure visible, generous transparent margin. Genuine transparent alpha background; NO landscape, backdrop, floor plane, UI, writing, characters, watermark or cast ground shadow. The building's footprint bottom at y88% and its blank front-facing circular dark wooden/metal sign centered x50%, y73% of the square; the game will overlay a letter there, so leave this round sign BLANK. Building sits on a small attached foundation only. This is one stage in a deliberately dramatic poor-to-grand evolution. Do not copy an elegant ivory crystal tower shape into every stage.\nSTAGE FOUR, LEGENDARY STORM CITADEL: a grand tall cathedral fortress in ivory stone, polished gold and deep cobalt, three soaring gilded spires with huge radiant blue crystals, small satellite turrets, a magnificent suspended golden celestial halo and contained lightning arcs above its crown. Intricate floating rings, gold filigree, luminous blue windows, imposing stepped octagonal base. Strong tall symmetrical silhouette nearly filling height, top at y5%, front blank dark navy round medallion centered y73%. Extravagant, radiant, regal endgame architecture, maximum contrast from a poor wooden hut. Keep aura tightly around structure and the background genuinely transparent.",
+      "file": "guardian-evolution-4.png",
+      "transparent": true
+    }
+  ]
+}
